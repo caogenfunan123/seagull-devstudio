@@ -1,9 +1,13 @@
 /**
  * @dsh-android/dsh-android-apk-tools - APK decompile & rebuild tools.
- * Runs apktool/jadx/zipalign/apksigner inside the Ubuntu PRoot container.
+ * Runs apktool/jadx/zipalign/apksigner inside the Ubuntu container.
+ *
+ * C 方案修复 (2026-09-01)：对齐 dsh-android-bridge 成功模式——
+ *   inject 声明 tools 硬依赖 + defineTool 包装工具，修复 ctx.get('tools') 静默 undefined。
  */
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { defineTool } from '@deepseek-ai/dsh-tools';
 
 const execFileAsync = promisify(execFile);
 
@@ -24,12 +28,12 @@ async function runInUbuntu(cmd, timeout) {
   }
 }
 
-export function apply(ctx) {
-  const tools = ctx.get('tools');
-  if (tools === undefined) return;
-  const disp = [];
+function renderText(_a, v) {
+  return [{ type: 'text', text: typeof v === 'string' ? v : JSON.stringify(v) }];
+}
 
-  disp.push(tools.register({
+function tools() {
+  const decompileTool = defineTool({
     name: 'apk_decompile',
     description: 'Decompile an APK to smali (apktool) or Java source (jadx), or both.',
     parameters: {
@@ -41,6 +45,7 @@ export function apply(ctx) {
       },
       required: ['apkPath', 'outDir'],
     },
+    output: { schema: { type: 'object', additionalProperties: true }, render: renderText },
     async execute({ apkPath, outDir, mode = 'apktool' }) {
       let cmd;
       if (mode === 'apktool') cmd = 'apktool d ' + JSON.stringify(apkPath) + ' -o ' + JSON.stringify(outDir) + ' -f';
@@ -48,9 +53,9 @@ export function apply(ctx) {
       else cmd = 'apktool d ' + JSON.stringify(apkPath) + ' -o ' + JSON.stringify(outDir + '/smali') + ' -f && jadx -d ' + JSON.stringify(outDir + '/src') + ' ' + JSON.stringify(apkPath);
       return runInUbuntu(cmd);
     },
-  }));
+  });
 
-  disp.push(tools.register({
+  const buildSignTool = defineTool({
     name: 'apk_build_sign',
     description: 'Rebuild an APK project directory, then zipalign and debug-sign it.',
     parameters: {
@@ -61,6 +66,7 @@ export function apply(ctx) {
       },
       required: ['srcDir', 'outApk'],
     },
+    output: { schema: { type: 'object', additionalProperties: true }, render: renderText },
     async execute({ srcDir, outApk }) {
       const unsigned = JSON.stringify(outApk + '.unsigned.apk');
       const aligned = JSON.stringify(outApk + '.aligned.apk');
@@ -74,7 +80,15 @@ export function apply(ctx) {
       const r = await runInUbuntu(cmd);
       return r.ok ? { ok: true, outApk } : r;
     },
-  }));
+  });
 
-  ctx.effect(() => () => disp.forEach((d) => d && d()));
+  return [decompileTool, buildSignTool];
+}
+
+// C 方案：显式声明 tools 硬依赖（对齐 bridge/manage），修复 ctx.get('tools') 静默 undefined。
+export const inject = ['tools'];
+
+export function apply(ctx) {
+  for (const t of tools())
+    ctx.tools.register(t);
 }
