@@ -4,7 +4,7 @@
 # ==============================================================================
 set -eu
 
-UBUNTU_ROOT="${1:-/data/data/com.seagull.devstudio/files/home/.dsh/ubuntu-rootfs}"
+UBUNTU_ROOT="${1:-/data/data/com.dsharnessmobile.shell/files/home/.dsh/ubuntu-rootfs}"
 
 mkdir -p "${UBUNTU_ROOT}/proc" "${UBUNTU_ROOT}/sys" "${UBUNTU_ROOT}/sys/.empty"
 chmod 755 "${UBUNTU_ROOT}/proc" "${UBUNTU_ROOT}/sys"

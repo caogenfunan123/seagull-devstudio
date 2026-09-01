@@ -1,8 +1,11 @@
 {
-  "name": "@seagull/dsh-plugin-dev-tools",
+  "name": "@dsh-android/dsh-android-dev-tools",
   "version": "1.0.0",
   "description": "Developer toolchain dispatcher (Clang, Java, Python, PRoot) for Seagull DevStudio",
   "main": "lib/index.js",
   "type": "module",
-  "dependencies": {}
+  "dependencies": {},
+  "scripts": {
+    "build": "node ../../scripts/build-plugin.mjs dev-tools"
+  }
 }

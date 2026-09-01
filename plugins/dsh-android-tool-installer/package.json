@@ -1,8 +1,11 @@
 {
-  "name": "@seagull/dsh-plugin-tool-installer",
+  "name": "@dsh-android/dsh-android-tool-installer",
   "version": "1.0.0",
   "description": "Three-tier tool installer registry (L1 built-in / L2 opt-in / L3 AI on-demand)",
   "main": "lib/index.js",
   "type": "module",
-  "dependencies": {}
+  "dependencies": {},
+  "scripts": {
+    "build": "node ../../scripts/build-plugin.mjs tool-installer"
+  }
 }

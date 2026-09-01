@@ -18,7 +18,8 @@ import sys
 import tarfile
 
 PLUGIN_ROOT = "home/.dsh/profiles"
-INJECT_FILES = {"package.json"}
+# scoped 包可一并携带的非 lib 文件（persona.md 由 dsh-android-seagull 读取）
+INJECT_FILES = {"package.json", "persona.md"}
 
 
 def is_injectable(name, pkg_names):
@@ -56,6 +57,12 @@ def build_replacements(pkg_dirs):
                     files["lib/" + rel] = f.read()
         with open(os.path.join(d, "package.json"), "rb") as f:
             files["package.json"] = f.read()
+        # 可选随包携带的非 lib 文件（persona.md 等）
+        for extra in INJECT_FILES - {"package.json"}:
+            p = os.path.join(d, extra)
+            if os.path.isfile(p):
+                with open(p, "rb") as f:
+                    files[extra] = f.read()
         out[name] = files
     return out
 

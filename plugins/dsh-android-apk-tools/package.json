@@ -1,8 +1,11 @@
 {
-  "name": "@seagull/dsh-plugin-apk-tools",
+  "name": "@dsh-android/dsh-android-apk-tools",
   "version": "1.0.0",
   "description": "Android APK reverse engineering and build toolchain (Apktool, JADX, D8, AAPT2, apksigner)",
   "main": "lib/index.js",
   "type": "module",
-  "dependencies": {}
+  "dependencies": {},
+  "scripts": {
+    "build": "node ../../scripts/build-plugin.mjs apk-tools"
+  }
 }

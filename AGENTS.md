@@ -203,3 +203,23 @@ cd ..\plugins\dsh-android-<pkg> && npm run build
 | 2026-08-30 | 0.13.1 | **文档结构化增补**：坑 30-32 登记（assets ABI 残留/linker64 孤儿 force-stop 杀不死/forward 静默失效——与协调仓雷点 14-16 同源）；标题 AGENT.md→AGENTS.md 对齐文件名；产物路径硬编码 v0.13.0 → v<版本> 占位（产物命名已由 ps1 从 gradle 单一来源读取）；§1 补版本状态与开放跟踪行 | AI 开发助手 |
 | 2026-08-31 | 0.13.2 | **插件构建产物收口（chore, 348011c）**：.gitignore 补 `plugins/*/lib/`、`plugins/*/node_modules/`、`plugins/*/cbin_*`（本地/云端 npm 构建产物不入库）并清理存量 untracked 产物；ci/pr61-fix 孤儿分支（无 PR）与已合并 PR 的旧分支保留未动 | AI 开发助手 |
 | 2026-08-31 | 0.13.2-preview | **0.13.2-preview 功能批（versionCode 28 + versionName 0.13.2-preview；未发布，待用户指示）**：W6 内嵌 ADBKeyboard 协议 IME（AdbKeyboardService/Receiver，dcfd573）+ manage 语义工具双写（1bb0cc7）+ 门禁 settings.yaml 内容级修正（5d9988b）+ W7 悬浮球全套（OverlayService/OverlayController + live 流 + 开关，d76dc41/56c96b7）+ **preview 修正批（ae8a78d）**——面板跟随球（repositionPanel）、引擎页避让帧（emitFrame/replayFrame + frameConsumer 先于 ensureStarted 注册 + onPageFinished 补放 + instance/onDestroy 注销）、贴边容差 20dp；设备实测：避让 124px 注入/拖动清零/面板跟随；§4 文件表补 OverlayService/AdbKeyboardService 两行；preview 发布/PR 模板三要点见协调仓 AGENTS.md §4 | AI 开发助手 |
+
+## 9. Seagull DevStudio Fork（海鸥自改分支）
+
+本 fork 在 0.13.2-preview 基础上注入 Seagull（海鸥）全能开发能力，改动面：
+
+- **品牌与包名**：`app_name=Seagull DevStudio`，`ds_brand_subtitle=Ubuntu ARM64 开发者运行时`；包名保持 `com.dsharnessmobile.shell` 不变（避免路径大地震），versionName `0.13.2-seagull`，仅 `arm64-v8a`（`abiFilters` 单保留）。
+- **新增 5 个 `@dsh-android/dsh-android-*` 插件**（纯 JS，`src/` → `lib/` 由 `scripts/build-plugin.mjs` 构建，`lib/` 不入库）：
+  - `dsh-android-seagull`：海鸥 persona 注入器——加载包内 `persona.md`（即完整海鸥 3.0 破甲，来自 `presets/seagull-root/SEAGULL_FULL_INSTRUCTIONS.md`）经 `system-prompt/assemble` 注入每条会话。复刻 live `dsh-seagull` 成熟机制。
+  - `dsh-android-root-ops`：root 工具（`root_exec`/`device_ui_control`）+ 仅 danger-full-access 时注入 root 感知提示。用干净 env 调 `/system/bin/su`。
+  - `dsh-android-dev-tools`：`ubuntu_exec`/`ubuntu_status`，进 Ubuntu PRoot 容器执行命令。
+  - `dsh-android-apk-tools`：`apk_decompile`/`apk_build_sign`（apktool→zipalign→apksigner，跑在 Ubuntu 内）。
+  - `dsh-android-tool-installer`：`tool_install`/`tool_list` + `toolInstaller` 服务（L1 内建 apktool/jadx，L2 选装 radare2/rizin）。
+- **装配**：`scripts/profile-web.cordis.patch.yml` 的 insert 块加入上述 5 个插件；`scripts/build-apk.mjs` 的 `pluginDirs` 同步追加；`inject-snapshot.py` 扩展 `INJECT_FILES` 携带 `persona.md`。
+- **Ubuntu rootfs 构建链**：`scripts/build-ubuntu-rootfs.sh`（proot-distro 或 debootstrap 交叉构建，产出 `app/src/main/assets/ubuntu-rootfs.tar.xz` + sha256）、`scripts/launch_ubuntu_proot.sh`（独立启动器 + fake sysdata 挂载）、`scripts/setup_fake_sysdata.sh`（伪造 /proc）。rootfs 顶层含 `proot-entry.sh`（插件按 `${HOME}/.dsh/ubuntu-rootfs/proot-entry.sh` 调用）。
+- **CI**：移除冗余且必然失败的 `build-arm64.yml`；`build-apk.yml` 插件构建循环加入 5 个 Seagull 插件，快照从源重建失败时回退下载上游官方 `snapshot-*.tar.xz`。arm64 额外尝试构建 Ubuntu rootfs 资产（失败不阻塞）。
+- **presets/seagull-root/**：海鸥 3.0 完整提示（`SEAGULL_FULL_INSTRUCTIONS.md`）与 root-aware 运行时说明的源稿；运行时生效路径为插件注入（见 dsh-android-seagull），非 preset 目录直读。
+
+| 时间 | 版本 | 更新内容 | 更新者 |
+|---|---|---|---|
+| 2026-09-01 | 0.13.2-seagull | **Seagull fork 首版**：品牌化 + arm64-only + 5 个 @dsh-android 插件（seagull persona 注入 / root-ops / dev-tools / apk-tools / tool-installer）+ 真实 Ubuntu rootfs 构建链 + inject-snapshot 携 persona.md + 移除破坏性 build-arm64.yml + CI 插件构建与快照回退 | AI 开发助手 |

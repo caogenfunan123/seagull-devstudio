@@ -1,8 +1,11 @@
 {
-  "name": "@seagull/dsh-plugin-root-ops",
+  "name": "@dsh-android/dsh-android-root-ops",
   "version": "1.0.0",
   "description": "Root-level operations and clean execution for DeepSeek Harness on Android",
   "main": "lib/index.js",
   "type": "module",
-  "dependencies": {}
+  "dependencies": {},
+  "scripts": {
+    "build": "node ../../scripts/build-plugin.mjs root-ops"
+  }
 }

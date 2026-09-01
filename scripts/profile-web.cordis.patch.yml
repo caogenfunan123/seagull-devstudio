@@ -4,29 +4,27 @@
 - id: bash-sandbox
   disabled: true
 - insert:
-    - id: seagull-root-ops
-      name: '@seagull/dsh-plugin-root-ops'
-    - id: seagull-dev-tools
-      name: '@seagull/dsh-plugin-dev-tools'
-    - id: seagull-apk-tools
-      name: '@seagull/dsh-plugin-apk-tools'
-    - id: seagull-tool-installer
-      name: '@seagull/dsh-plugin-tool-installer'
-    - id: superuser
-      name: '@dsh-android/dsh-superuser'
-    - id: seagull
-      name: '@dsh-android/dsh-seagull'
+    - id: dsh-android-seagull
+      name: '@dsh-android/dsh-android-seagull'
+    - id: dsh-android-root-ops
+      name: '@dsh-android/dsh-android-root-ops'
+    - id: dsh-android-dev-tools
+      name: '@dsh-android/dsh-android-dev-tools'
+    - id: dsh-android-apk-tools
+      name: '@dsh-android/dsh-android-apk-tools'
+    - id: dsh-android-tool-installer
+      name: '@dsh-android/dsh-android-tool-installer'
     - id: shell-termux
       name: '@dsh-android/dsh-shell-termux'
       config:
-        bashPath: /data/data/com.seagull.devstudio/files/usr/bin/bash
-        prefix: /data/data/com.seagull.devstudio/files/usr
-        home: /data/data/com.seagull.devstudio/files/home
-        cwd: /data/data/com.seagull.devstudio/files/home
+        bashPath: /data/data/com.dsharnessmobile.shell/files/usr/bin/bash
+        prefix: /data/data/com.dsharnessmobile.shell/files/usr
+        home: /data/data/com.dsharnessmobile.shell/files/home
+        cwd: /data/data/com.dsharnessmobile.shell/files/home
         timeoutMs: 120000
         maxTimeoutMs: 600000
         writeMode: workspace-write
-        workspaceRoot: /data/data/com.seagull.devstudio/files/home/.dsh/workspaces
+        workspaceRoot: /data/data/com.dsharnessmobile.shell/files/home/.dsh/workspaces
         sharedDirs: []
     - id: host-web-compat
       name: '@dsh-android/dsh-host-web-compat'

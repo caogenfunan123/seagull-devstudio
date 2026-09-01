@@ -4,16 +4,18 @@ plugins {
 }
 
 android {
-  namespace = "com.seagull.devstudio"
+  namespace = "com.dsharnessmobile.shell"
   compileSdk = 36
 
   defaultConfig {
-    applicationId = "com.seagull.devstudio"
+    applicationId = "com.dsharnessmobile.shell"
     minSdk = 26
     // targetSdk 34: Android 15+ forbids exec of app-data ELF for targetSdk 35+
     targetSdk = 34
-    versionCode = 1
-    versionName = "1.0.0-arm64"
+    // Seagull DevStudio fork: version bumped from upstream 0.13.2-preview.
+    versionCode = 28
+    val snapshotSuffix = providers.gradleProperty("versionNameSuffix").getOrElse("")
+    versionName = "0.13.2-seagull" + snapshotSuffix
     buildConfigField("String", "TERMUX_VERSION", "\"0.118.3\"")
 
     ndk {
@@ -28,6 +30,7 @@ android {
 
   androidResources {
     // snapshot.tar.xz is already xz-compressed; double-compressing it breaks openFd.
+    // ubuntu-rootfs.tar.xz likewise stays raw so the on-demand PRoot rootfs can stream-extract.
     noCompress += "xz"
   }
 
@@ -76,7 +79,7 @@ tasks.whenTaskAdded {
       if (!snap.exists()) {
         throw GradleException(
           "缺少运行时快照 assets/snapshot.tar.xz —— " +
-            "从 GitHub Releases 下载 snapshot-x86_64.tar.xz 后放到 app/src/main/assets/snapshot.tar.xz（见 README.md）",
+            "从 GitHub Releases 下载 snapshot-arm64.tar.xz 后放到 app/src/main/assets/snapshot.tar.xz（见 README.md）",
         )
       }
     }

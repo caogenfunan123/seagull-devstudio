@@ -4,8 +4,8 @@
 # ==============================================================================
 set -eu
 
-PREFIX="${PREFIX:-/data/data/com.seagull.devstudio/files/usr}"
-HOME_DIR="${HOME:-/data/data/com.seagull.devstudio/files/home}"
+PREFIX="${PREFIX:-/data/data/com.dsharnessmobile.shell/files/usr}"
+HOME_DIR="${HOME:-/data/data/com.dsharnessmobile.shell/files/home}"
 UBUNTU_ROOT="${HOME_DIR}/.dsh/ubuntu-rootfs"
 PROOT_BIN="${PREFIX}/bin/proot"
 

@@ -1,0 +1,13 @@
+{
+  "name": "@dsh-android/dsh-android-seagull",
+  "description": "海鸥 persona 注入器：经 system-prompt/assemble 把完整海鸥 3.0 破甲提示注入每条会话",
+  "version": "0.1.0",
+  "type": "module",
+  "private": true,
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./package.json": "./package.json"
+  },
+  "license": "MIT"
+}

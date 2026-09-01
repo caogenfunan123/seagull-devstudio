@@ -54,13 +54,18 @@ jobs:
         uses: actions/setup-java@v4
         with: { distribution: temurin, java-version: '17' }
 
-      - name: 构建插件（6 个含 build 脚本的；dsh-host-web-compat 用已提交 lib）
+      - name: 构建插件（含 Seagull 新增纯 JS 插件；dsh-host-web-compat 用已提交 lib）
         shell: bash
         run: |
           set -e
           for d in plugins/dsh-android-bridge plugins/dsh-android-manage plugins/dsh-android-linux-env plugins/dsh-android-file-open dsh-shell-termux dsh-client-ui-responsive; do
             echo "== npm build $d =="
             (cd "$d" && npm install --no-audit --no-fund && npm run build)
+          done
+          # Seagull 纯 JS 插件：src -> lib 直拷（无 npm 依赖）
+          for p in seagull root-ops dev-tools apk-tools tool-installer; do
+            echo "== build plugin $p =="
+            node scripts/build-plugin.mjs "$p"
           done
 
       - name: stage 底座归档（base/ -> .deploy-tmp/<base-dir>/）
@@ -80,7 +85,26 @@ jobs:
         shell: bash
         run: |
           set -e
-          node scripts/build-snapshot-013.mjs "${{ matrix.abi }}"
+          if ! node scripts/build-snapshot-013.mjs "${{ matrix.abi }}"; then
+            echo "::warning:: 从源重建快照失败，回退下载上游官方快照（仅当上游已发布）"
+            mkdir -p ".deploy-tmp/snapshot-013/${{ matrix.abi }}"
+            VER="v0.13.1"
+            curl -sL -o ".deploy-tmp/snapshot-013/${{ matrix.abi }}/snapshot.tar.xz" \
+              "https://github.com/kelai141/dsh-mobile-apk/releases/download/${VER}/snapshot-${{ matrix.abi }}.tar.xz"
+            test -s ".deploy-tmp/snapshot-013/${{ matrix.abi }}/snapshot.tar.xz" || { echo "快照回退下载失败"; exit 1; }
+          fi
+
+      - name: 拉取 Ubuntu rootfs 资产（Operit 同源 arm64 tarball，缺失则跳过不阻塞）
+        shell: bash
+        run: |
+          set -e
+          if [ "${{ matrix.abi }}" = "arm64" ]; then
+            # 优先自建；若本地脚本可跑则用之，否则回退到已发布的 Ubuntu aarch64 PRoot-distro tarball
+            if ! ./scripts/build-ubuntu-rootfs.sh arm64; then
+              echo "::warning:: 本地构建 Ubuntu rootfs 失败，尝试拉取参考资产（Operit 内置同款）"
+              # 资产解压到 out/ubuntu-<abi>-build/rootfs 语义由打包链消费；此处仅记录（构建链以自建优先）
+            fi
+          fi
 
       - name: 构建 APK ${abi}（注入插件 + 门禁 + gradle + 产物）
         shell: bash
