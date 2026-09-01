@@ -1,0 +1,10 @@
+name: seagull-root-preset
+version: 1.0.0
+description: Seagull 3.0 Root-aware Engineering Preset for DeepSeek Harness
+plugins:
+  - name: dsh-plugin-root-ops
+  - name: dsh-plugin-dev-tools
+  - name: dsh-android-bridge
+  - name: dsh-android-manage
+  - name: dsh-android-linux-env
+  - name: dsh-android-file-open

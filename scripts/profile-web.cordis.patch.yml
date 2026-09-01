@@ -4,24 +4,21 @@
 - id: bash-sandbox
   disabled: true
 - insert:
+    - id: seagull-root-ops
+      name: '@seagull/dsh-plugin-root-ops'
+    - id: seagull-dev-tools
+      name: '@seagull/dsh-plugin-dev-tools'
     - id: shell-termux
       name: '@dsh-android/dsh-shell-termux'
       config:
-        # bash/toolchain point at the in-shell snapshot (same domain as the engine, self-contained, no Termux App dependency):
-        # the Termux App's bash belongs to u0_a423 with 700 perms, so the engine (u0_a461) cross-uid
-        # accessSync(X_OK) check always fails (measured "is not executable"). The in-shell
-        # usr/bin ships bash/curl/node; wget is now distributed with the snapshot too.
-        bashPath: /data/data/com.dsharnessmobile.shell/files/usr/bin/bash
-        prefix: /data/data/com.dsharnessmobile.shell/files/usr
-        home: /data/data/com.dsharnessmobile.shell/files/home
-        cwd: /data/data/com.dsharnessmobile.shell/files/home
+        bashPath: /data/data/com.seagull.devstudio/files/usr/bin/bash
+        prefix: /data/data/com.seagull.devstudio/files/usr
+        home: /data/data/com.seagull.devstudio/files/home
+        cwd: /data/data/com.seagull.devstudio/files/home
         timeoutMs: 120000
         maxTimeoutMs: 600000
-        # 写面栅栏（0.13.0 D21）：默认档位仅工作区与选定共享目录；danger-full-access 为完全访问档位
-        # （开放共享存储全域，仍限应用域沙盒）。workspaceRoot/sharedDirs 为全局单一实例，
-        # 由 dsh-android-linux-env 插件在设置页动态维护（此处的初始值仅出厂基线）。
         writeMode: workspace-write
-        workspaceRoot: /data/data/com.dsharnessmobile.shell/files/home/.dsh/workspaces
+        workspaceRoot: /data/data/com.seagull.devstudio/files/home/.dsh/workspaces
         sharedDirs: []
     - id: host-web-compat
       name: '@dsh-android/dsh-host-web-compat'
