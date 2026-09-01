@@ -1,0 +1,17 @@
+build/
+.gradle/
+.gradle-home/
+local.properties
+snapshot/
+app/src/main/assets/snapshot.tar.xz
+# 敏感数据（安全审计 2026-08-14）
+*.credentials.yaml
+token*
+*.key
+*.pem
+*.p12
+.kotlin/
+# 插件构建产物（云端/本地 npm 构建生成，不入库；2026-08-31 收口）
+plugins/*/lib/
+plugins/*/node_modules/
+plugins/*/cbin_*

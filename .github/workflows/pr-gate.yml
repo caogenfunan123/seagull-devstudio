@@ -1,0 +1,49 @@
+# PR Gate — dsh-mobile-apk: static scan + Kotlin compile gate + PR spec checks
+# Release gating still lives in the local build-release.ps1; this only blocks low-level errors and spec issues.
+name: PR Gate
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  static:
+    name: 冲突标记与敏感信息扫描
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: 冲突标记检查
+        run: |
+          if grep -rEn '^(<<<<<<< |>>>>>>> )' app/src --include='*.kt' --include='*.java' --include='*.xml' --include='*.html' --include='*.js' --include='*.yml' --include='*.yaml'; then
+            echo "::error::检测到未解决的 merge conflict 标记"
+            exit 1
+          fi
+          echo "无冲突标记 ✓"
+      - name: 敏感信息扫描
+        run: |
+          if grep -rEn '(sk-[A-Za-z0-9]{16,}|ghp_[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16}|xox[baprs]-[A-Za-z0-9-]{10,})' app/src scripts 2>/dev/null; then
+            echo "::error::检测到疑似密钥/令牌"
+            exit 1
+          fi
+          echo "无敏感信息 ✓"
+
+  compile:
+    name: Kotlin 编译门禁
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      # Gradle cache acceleration: dependency/build caches reused across runs (full on first, incremental after)
+      - uses: gradle/actions/setup-gradle@v4
+      - name: 确保 Android SDK platform 36
+        run: |
+          yes | sudo "${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager" "platforms;android-36" "build-tools;36.0.0" >/dev/null 2>&1 || true
+      - name: 编译 debug Kotlin（compileDebugKotlin，不依赖快照资产）
+        run: |
+          chmod +x gradlew
+          ./gradlew :app:compileDebugKotlin --no-daemon --stacktrace
+

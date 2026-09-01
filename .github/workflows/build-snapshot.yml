@@ -1,0 +1,166 @@
+# Snapshot Build (CI) — 双 ABI APK 构建，产物只存 workflow artifact，不创建 release。
+# 触发：workflow_dispatch（手动，可带 -SN-x 后缀）或 push 到 release/*（正式版自动构建）。
+# 快照输入：draft release tag（默认 snapshot-input）资产，由 scripts/upload-snapshot-input.mjs 上传。
+# 流程：checkout 插件 → npm build/pack → 下载快照 → inject-snapshot.py 注入 → 门禁 →
+#       双 ABI gradle 构建（-PversionNameSuffix）→ MANIFEST → upload-artifact。
+name: Snapshot Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      version_suffix:
+        description: '快照后缀（如 -SN-1-RC8；留空 = 正式版）'
+        required: false
+        default: ''
+      snapshot_tag:
+        description: '快照输入资产 tag'
+        required: false
+        default: 'snapshot-input'
+      plugins_ref:
+        description: '插件仓库 ref（分支/tag/SHA，三仓共用）'
+        required: false
+        default: 'main'
+  push:
+    branches: ['release/*']
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      # ---- checkout：apk 自身 + root 脚本 + 3 插件仓（path 必须在 workspace 内）----
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: kelai141/dsh-mobile
+          token: ${{ secrets.GH_PAT }}   # dsh-mobile 为私有仓库，GITHUB_TOKEN 无跨仓读权限
+          path: dsh-mobile
+      - uses: actions/checkout@v4
+        with:
+          repository: kelai141/dsh-shell-termux
+          ref: ${{ inputs.plugins_ref || 'main' }}
+          path: dsh-shell-termux
+      - uses: actions/checkout@v4
+        with:
+          repository: kelai141/dsh-client-ui-responsive
+          ref: ${{ inputs.plugins_ref || 'main' }}
+          path: dsh-client-ui-responsive
+      - uses: actions/checkout@v4
+        with:
+          repository: kelai141/dsh-host-web-compat
+          ref: ${{ inputs.plugins_ref || 'main' }}
+          path: dsh-host-web-compat
+
+      # ---- 构建环境 ----
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Android SDK 36
+        run: |
+          yes | sudo "${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager" "platforms;android-36" "build-tools;36.0.0" >/dev/null 2>&1 || true
+      - uses: actions/setup-node@v4
+        with:
+          # Node 22+: tsdown loads tsdown.config.ts via native TS (Node 20 falls
+          # back to the optional `unrun` loader, which npm ci does not install).
+          node-version: 22
+
+      # ---- 版本号：build.gradle.kts 基础值 + 快照后缀 ----
+      - name: 版本号
+        id: ver
+        run: |
+          VER=$(sed -n 's/.*versionName = "\([^"]*\)".*/\1/p' app/build.gradle.kts)
+          SUF="${{ inputs.version_suffix }}"
+          echo "version=${VER}${SUF}" >> "$GITHUB_OUTPUT"
+          echo "基础版本: $VER 后缀: '$SUF' → ${VER}${SUF}"
+
+      # ---- 下载快照（draft release 资产需 PAT；GITHUB_TOKEN 无 draft 可见性）----
+      - name: 下载快照
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          mkdir -p snapshot
+          TAG="${{ inputs.snapshot_tag || 'snapshot-input' }}"
+          for abi in arm64 x86_64; do
+            ASSET_ID=$(gh api "/repos/kelai141/dsh-mobile-apk/releases?per_page=100" \
+              --jq ".[] | select(.tag_name==\"${TAG}\") | .assets[] | select(.name==\"snapshot-${abi}.tar.xz\") | .id" | head -1)
+            if [ -z "$ASSET_ID" ]; then
+              echo "::error::快照资产未找到: snapshot-${abi}.tar.xz @ ${TAG}（先运行 scripts/upload-snapshot-input.mjs）"
+              exit 1
+            fi
+            gh api -H "Accept: application/octet-stream" \
+              "/repos/kelai141/dsh-mobile-apk/releases/assets/${ASSET_ID}" \
+              > "snapshot/snapshot-${abi}.tar.xz"
+          done
+          ls -l snapshot/
+
+      # ---- 插件构建 + pack（shell-termux/ui-responsive 需 build；web-compat 源码入库只 pack）----
+      - name: 插件构建 + pack
+        run: |
+          mkdir -p plugins
+          (cd dsh-shell-termux && npm ci && npm run build && npm pack --pack-destination "$GITHUB_WORKSPACE/plugins")
+          (cd dsh-client-ui-responsive && npm ci && npm run build && npm pack --pack-destination "$GITHUB_WORKSPACE/plugins")
+          (cd dsh-host-web-compat && npm pack --pack-destination "$GITHUB_WORKSPACE/plugins")
+          ls -l plugins/
+
+      # ---- 快照注入（字节级 tar 流，保留 symlink 元数据）----
+      - name: 快照注入
+        run: |
+          for abi in arm64 x86_64; do
+            python3 dsh-mobile/scripts/inject-snapshot.py \
+              "snapshot/snapshot-${abi}.tar.xz" "snapshot/snapshot-${abi}.new.tar.xz" \
+              "$GITHUB_WORKSPACE/dsh-shell-termux" "$GITHUB_WORKSPACE/dsh-client-ui-responsive" "$GITHUB_WORKSPACE/dsh-host-web-compat"
+            mv "snapshot/snapshot-${abi}.new.tar.xz" "snapshot/snapshot-${abi}.tar.xz"
+          done
+
+      # ---- 门禁：ELF 架构 + 敏感内容 + 插件一致性 ----
+      - name: 门禁
+        run: |
+          PLUGINS="$GITHUB_WORKSPACE/dsh-shell-termux $GITHUB_WORKSPACE/dsh-client-ui-responsive $GITHUB_WORKSPACE/dsh-host-web-compat"
+          python3 dsh-mobile/scripts/ci-verify-snapshot.py snapshot/snapshot-arm64.tar.xz aarch64 $PLUGINS
+          python3 dsh-mobile/scripts/ci-verify-snapshot.py snapshot/snapshot-x86_64.tar.xz x86_64 $PLUGINS
+
+      # ---- 双 ABI APK（每次构建前换快照 + 指纹）----
+      - name: 双 ABI APK 构建
+        env:
+          # GitHub runner 的 ~/.config 不可写，AGP 建 debug keystore 失败；改到 workspace 可写目录。
+          # 同时用仓库内置 debug.keystore（keystore/）——保证 CI 与历史发布签名一致，
+          # 否则每次构建生成新 keystore，用户无法覆盖安装升级。
+          ANDROID_USER_HOME: ${{ github.workspace }}/.android-home
+        run: |
+          chmod +x gradlew
+          mkdir -p "$ANDROID_USER_HOME/.android" out/apk out/snapshot out/plugins
+          cp keystore/debug.keystore "$ANDROID_USER_HOME/.android/debug.keystore"
+          VER="${{ steps.ver.outputs.version }}"
+          for pair in "arm64-v8a:snapshot-arm64.tar.xz" "x86_64:snapshot-x86_64.tar.xz"; do
+            ABI=${pair%%:*}
+            SNAP=${pair##*:}
+            cp "snapshot/${SNAP}" app/src/main/assets/snapshot.tar.xz
+            sha256sum "snapshot/${SNAP}" | awk '{print $1}' > app/src/main/assets/snapshot.sha256
+            ./gradlew :app:assembleDebug --no-daemon --rerun-tasks -PversionNameSuffix="${{ inputs.version_suffix }}"
+            cp app/build/outputs/apk/debug/app-debug.apk "out/apk/dsh-mobile-apk-v${VER}-${ABI}.apk"
+          done
+          cp snapshot/snapshot-arm64.tar.xz out/snapshot/
+          cp snapshot/snapshot-x86_64.tar.xz out/snapshot/
+          cp plugins/*.tgz out/plugins/
+
+      # ---- MANIFEST + notes 模板（与本地 release 目录结构一致）----
+      - name: MANIFEST + notes
+        run: |
+          cd out
+          find . -type f ! -name MANIFEST.txt ! -name notes.md | sort | while read -r f; do
+            rel=${f#./}
+            echo "$(sha256sum "$f" | awk '{print $1}')  ${rel}  $(stat -c%s "$f")"
+          done > MANIFEST.txt
+          printf '# v%s 发布说明\n\n## 改动\n- \n\n## 验证记录（门禁要求：每个 ABI 必须引用验证）\n- arm64-v8a: （真机/MuMu 记录）\n- x86_64: （MuMu 记录）\n' "${{ steps.ver.outputs.version }}" > notes.md
+          cat MANIFEST.txt
+
+      # ---- 产物只存 artifact（不创建 release）----
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dsh-mobile-apk-${{ steps.ver.outputs.version }}
+          path: out/
+          retention-days: 90

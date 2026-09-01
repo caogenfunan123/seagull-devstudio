@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+  <color name="ds_bg">#080A09</color>
+  <color name="ds_shell">#12FFFFFF</color>
+  <color name="ds_surface">#131715</color>
+  <color name="ds_surface_muted">#1B211E</color>
+  <color name="ds_chip">#14FFFFFF</color>
+  <color name="ds_border">#18FFFFFF</color>
+  <color name="ds_hairline">#22FFFFFF</color>
+  <color name="ds_text_primary">#EEF2F0</color>
+  <color name="ds_text_secondary">#8CEEF2F0</color>
+  <color name="ds_text_tertiary">#59EEF2F0</color>
+  <color name="ds_text_on_accent">#04110F</color>
+  <color name="ds_accent">#3DDBCA</color>
+  <color name="ds_accent_pressed">#5EEAD4</color>
+  <color name="ds_accent_soft">#243DDBCA</color>
+  <color name="ds_glow">#1A3DDBCA</color>
+  <color name="ds_ok">#3DDBCA</color>
+  <color name="ds_warn">#F0B429</color>
+  <color name="ds_danger">#F87171</color>
+  <color name="ds_danger_soft">#24F87171</color>
+  <color name="ds_progress_track">#22EEF2F0</color>
+  <color name="ds_scrim">#E6080A09</color>
+</resources>

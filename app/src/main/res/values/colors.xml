@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+  <!-- 启动图标背景(保持) -->
+  <color name="ic_launcher_background">#ffffff</color>
+
+  <!-- UI 设计 token:精度仪器 + teal 信号色(浅色) -->
+  <color name="ds_bg">#F1F3F1</color>
+  <color name="ds_shell">#14000000</color>
+  <color name="ds_surface">#FFFFFF</color>
+  <color name="ds_surface_muted">#E7EBE8</color>
+  <color name="ds_chip">#12000000</color>
+  <color name="ds_border">#14000000</color>
+  <color name="ds_hairline">#1A000000</color>
+  <color name="ds_text_primary">#121513</color>
+  <color name="ds_text_secondary">#8C121513</color>
+  <color name="ds_text_tertiary">#5C121513</color>
+  <color name="ds_text_on_accent">#F4FFFC</color>
+  <color name="ds_accent">#0E7A72</color>
+  <color name="ds_accent_pressed">#0F5F59</color>
+  <color name="ds_accent_soft">#1A0E7A72</color>
+  <color name="ds_glow">#140E7A72</color>
+  <color name="ds_ok">#0E7A72</color>
+  <color name="ds_warn">#B45309</color>
+  <color name="ds_danger">#B42318</color>
+  <color name="ds_danger_soft">#18B42318</color>
+  <color name="ds_progress_track">#1A121513</color>
+  <color name="ds_scrim">#E6F1F3F1</color>
+</resources>

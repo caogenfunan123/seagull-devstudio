@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- FileProvider 路径映射（issue #52 + 2026-08-23 安全审计 CRITICAL 修复）：
+     外部阅读器打开文件需要 content://。安全边界（与 MainActivity.OPEN_READER_ROOTS 同步）：
+     - 外部存储仅 Documents/dshdata（用户导出仓库）；不授外部存储根（防任意 sdcard 文件外泄）
+     - 私有目录仅 filesDir/home/.dsh/workspaces 与 filesDir/home/tmp（引擎工作区/导出暂存）与
+       filesDir/usr/bin；绝不映射 filesDir/home/.dsh 其余部分（含 .credentials.yaml /
+       deepseek-key.txt 等机密）——引擎返回的路径若在私密区内，运行时白名单将拒绝，
+       前端回退引擎 RPC（桌面宿主行为）。
+     映射文件不存在时 FileProvider 抛 IllegalArgumentException，调用方已兜底。 -->
+<paths>
+  <external-path name="dshdata_exports" path="Documents/dshdata/" />
+  <files-path name="internal_workspaces" path="home/.dsh/workspaces/" />
+  <files-path name="internal_tmp" path="home/tmp/" />
+  <files-path name="internal_usr_bin" path="usr/bin/" />
+</paths>

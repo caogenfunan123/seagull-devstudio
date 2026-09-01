@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <title>DeepSeek Harness</title>
+        <script>
+      // dsh-mobile-es2022-polyfill (issue apk#81/#79, 2026-08-24): 华为/荣耀/小米系定制 WebView
+      // 内核长期停留在 Chromium <92，缺 Object.hasOwn / Array.prototype.at / String.prototype.at
+      // 等 ES2022 API——dsh 前端 bundle 使用它们，加载插件列表时抛 TypeError 并显示
+      // "Failed to load plugins"。在首个业务 script 之前注入 polyfill（可降级、不覆盖原生实现）。
+      (function () {
+        function def(t, k, v) {
+          if (k in t) return;
+          try { Object.defineProperty(t, k, { value: v, writable: true, enumerable: false, configurable: true }); } catch (e) {}
+        }
+        def(Object, "hasOwn", function (o, p) {
+          return Object.prototype.hasOwnProperty.call(o, p);
+        });
+        def(Array.prototype, "at", function (n) {
+          n = Math.trunc(n) || 0;
+          if (n < 0) n += this.length;
+          if (n < 0 || n >= this.length) return undefined;
+          return this[n];
+        });
+        def(String.prototype, "at", function (n) {
+          n = Math.trunc(n) || 0;
+          if (n < 0) n += this.length;
+          if (n < 0 || n >= this.length) return undefined;
+          return this.charAt(n);
+        });
+        // #81 补充观察：老内核同样缺 structuredClone/Array.flat 的场景由 dsh 上游兜底，这里不加
+        // 未报告项（最小面）。若 #81 评论区补报再扩。
+      })();
+      // dsh-mobile-clip-fallback-web: Android WebView rejects
+      // navigator.clipboard.writeText with NotAllowedError (no permission
+      // prompt). Wrap it globally so every copy path (message copy, code
+      // block copy, primitives writeClipboard) falls back to the native
+      // clipboard bridge window.androidBridge.copyText (ClipboardManager),
+      // then to execCommand("copy") under a user gesture.
+      (function () {
+        try {
+          var nc = navigator.clipboard;
+          var origWrite = nc && typeof nc.writeText === "function"
+            ? nc.writeText.bind(nc)
+            : null;
+          if (!origWrite) return;
+          nc.writeText = function (text) {
+            return origWrite(text).catch(function () {
+              var bridgeOk = false;
+              try {
+                if (window.androidBridge && typeof window.androidBridge.copyText === "function") {
+                  bridgeOk = window.androidBridge.copyText(String(text)) === true;
+                }
+              } catch (e) {}
+              if (bridgeOk) return Promise.resolve();
+              var done = false;
+              try {
+                var el = document.createElement("textarea");
+                el.value = String(text);
+                el.setAttribute("readonly", "");
+                el.style.position = "fixed";
+                el.style.left = "-9999px";
+                document.body.appendChild(el);
+                el.select();
+                done = document.execCommand("copy");
+                el.remove();
+              } catch (e) {}
+              if (done) return Promise.resolve();
+              return Promise.reject(new Error("clipboard write failed"));
+            });
+          };
+        } catch (e) {}
+      })();
+      // dsh-mobile-immersive: reflect the Android immersive-statusbar setting
+      // as a document attribute so plugins/CSS can adapt (v0.12.4, rc8).
+      (function () {
+        function applyImmersiveAttr() {
+          var on = false;
+          try { on = localStorage.getItem("dsh.android.immersive") !== "0"; } catch (e) {}
+          if (on) document.documentElement.setAttribute("data-dsh-immersive", "true");
+          else document.documentElement.removeAttribute("data-dsh-immersive");
+        }
+        applyImmersiveAttr();
+        window.addEventListener("storage", applyImmersiveAttr);
+        try { window.__dshImmersiveApply = applyImmersiveAttr; } catch (e) {}
+      })();
+    </script>    <script type="module" crossorigin src="/assets/index-ClqxG24t.js"></script>
+    <link rel="modulepreload" crossorigin href="/assets/vendor-D22_Mp1f.js">
+    <link rel="stylesheet" crossorigin href="/assets/vendor-CjyC-hUb.css">
+    <link rel="stylesheet" crossorigin href="/assets/index-C6eRlFa6.css">
+  </head>
+  <body>
+    <div id="root"></div>
+  </body>
+</html>
