@@ -5,6 +5,7 @@ plugins:
   - name: dsh-plugin-root-ops
   - name: dsh-plugin-dev-tools
   - name: dsh-plugin-apk-tools
+  - name: dsh-plugin-tool-installer
   - name: dsh-android-bridge
   - name: dsh-android-manage
   - name: dsh-android-linux-env

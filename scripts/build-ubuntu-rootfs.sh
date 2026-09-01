@@ -13,8 +13,6 @@ mkdir -p "${TARGET_DIR}" "${TEMP_BUILD_DIR}"
 cd "${TEMP_BUILD_DIR}"
 
 echo "=== [2/5] 配置 Ubuntu ARM64 基础运行环境 ==="
-# 标准 Ubuntu noble (24.04 LTS) arm64 基础环境结构定义
-# 在 CI/本地可通过 proot-distro 或 debootstrap 填充
 cat << 'EOF' > init-environment.sh
 #!/bin/bash
 export DEBIAN_FRONTEND=noninteractive
@@ -51,7 +49,6 @@ chmod +x init-environment.sh
 echo "=== [3/5] 生成 PRoot 启动包装入口 ==="
 cat << 'EOF' > "${TEMP_BUILD_DIR}/proot-entry.sh"
 #!/bin/bash
-# 宿主与 Ubuntu 容器的路径映射与环境桥接
 export UBUNTU_ROOT="${HOME}/.dsh/ubuntu-rootfs"
 export PROOT_BIN="${PREFIX}/bin/proot"
 
@@ -79,3 +76,4 @@ echo "=== [4/5] 验证核心打包资产 ==="
 echo "Ubuntu 开发者容器配置已就绪。CI 环境将把 ubuntu-rootfs.tar.xz 组装至 assets 目录。"
 
 echo "=== [5/5] 完成 ==="
+
