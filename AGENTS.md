@@ -230,3 +230,5 @@ cd ..\plugins\dsh-android-<pkg> && npm run build
 | 2026-09-02 | 0.13.2-seagull | **容器解压 + root 通道双修复**：① EngineManager.extractTarAsset 重写——补 dir/symlink 处理（proot-distro 根文件系统 `bin->usr/bin` 软链此前被丢，/bin /lib 缺失致容器起不来）+ zip-slip 防护 + exec 位保留，与 SnapshotExtractor 同等安全；② dsh-android-bridge 加 KernelSU root 通道探测（/system/bin/su 存在即授权满足，替代 ADB 三道门）——不再返回「请配对」引导，AdbAuthSection 显示「已就绪（root 通道）」并隐藏配对表单 | AI 开发助手 |
 
 | 2026-09-02 | 0.13.2-seagull | **地基修复批（复盘对齐清单）**：① proot 进快照 TARGETS（97KB，Ubuntu 容器启动命根——此前快照无 proot 容器根本起不来）；② install-java-tools.sh 按需安装器（openjdk-21+apktool+jadx+apksigner+aapt2，仿 install-clang 解包模式绕 dpkg EACCES）；③ apk-tools 重写为宿主双路径执行（usr/bin wrapper 优先 / usr/share 内置 jar 回退，java -jar 显式路径，**不经容器**）；④ extractToolAssets 幂等检查补 rootfs bin/bash 落点；⑤ 全部插件/Kotlin/脚本语法与 check-patch-mounts 门禁通过 | AI 开发助手 |
+
+| 2026-09-02 | 0.13.2-seagull | **root 保活功能（root-ops）**：周期巡检 su 可用性（su -c id 回 uid=0，60s 心跳，失败自动恢复重试）；KernelSU allowlist/denylist 校验（包名不在授权名单则提示，避免 root 调用被弹窗拦截）；新增 root_status 工具（root 就绪/allowlist/失败历史）+ rootKeepalive 服务面 | AI 开发助手 |
