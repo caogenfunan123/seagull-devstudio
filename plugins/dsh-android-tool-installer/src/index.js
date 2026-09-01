@@ -10,7 +10,16 @@ import { dirname, join } from 'node:path';
 import https from 'node:https';
 
 const execFileAsync = promisify(execFile);
-const USR = '/data/data/com.dsharnessmobile.shell/files/usr';
+
+// 运行时前缀由引擎 shellEnv() 注入（TERMUX__PREFIX/PREFIX），回退到本 fork 安装包路径。
+// 本 fork applicationId = com.dsharnessmobile.shell（编译安装后即此路径）。
+function runtimePrefix() {
+  return process.env.TERMUX__PREFIX || process.env.PREFIX || '/data/data/com.dsharnessmobile.shell/files/usr';
+}
+function runtimeHome() {
+  return process.env.HOME || '/data/data/com.dsharnessmobile.shell/files/home';
+}
+const USR = runtimePrefix();
 
 const TOOL_REGISTRY = {
   apktool: {
@@ -33,7 +42,8 @@ const TOOL_REGISTRY = {
   },
   rizin: {
     tier: 'L2', type: 'native', install: 'user-opt-in',
-    source: 'https://github.com/rizinorg/rizin/releases/download/v0.7.4/rizin-v0.7.4.tar.xz',
+    // 官方资产名为 rizin-v0.7.4-android-aarch64.tar.gz（arm64 原生安卓版）
+    source: 'https://github.com/rizinorg/rizin/releases/download/v0.7.4/rizin-v0.7.4-android-aarch64.tar.gz',
     installPath: join(USR, 'share', 'rizin'),
     description: 'Modern reverse engineering framework',
   },
@@ -59,8 +69,7 @@ function downloadFile(url, dest) {
 }
 
 function prootEntry() {
-  const home = process.env.HOME || '/data/data/com.dsharnessmobile.shell/files/home';
-  return home + '/.dsh/ubuntu-rootfs/proot-entry.sh';
+  return runtimeHome() + '/.dsh/ubuntu-rootfs/proot-entry.sh';
 }
 
 export function apply(ctx) {

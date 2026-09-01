@@ -94,16 +94,25 @@ jobs:
             test -s ".deploy-tmp/snapshot-013/${{ matrix.abi }}/snapshot.tar.xz" || { echo "快照回退下载失败"; exit 1; }
           fi
 
-      - name: 拉取 Ubuntu rootfs 资产（Operit 同源 arm64 tarball，缺失则跳过不阻塞）
+      - name: 拉取内置工具与 Ubuntu rootfs 资产（CI 自给自足，大文件不入库）
         shell: bash
         run: |
           set -e
           if [ "${{ matrix.abi }}" = "arm64" ]; then
-            # 优先自建；若本地脚本可跑则用之，否则回退到已发布的 Ubuntu aarch64 PRoot-distro tarball
-            if ! ./scripts/build-ubuntu-rootfs.sh arm64; then
-              echo "::warning:: 本地构建 Ubuntu rootfs 失败，尝试拉取参考资产（Operit 内置同款）"
-              # 资产解压到 out/ubuntu-<abi>-build/rootfs 语义由打包链消费；此处仅记录（构建链以自建优先）
-            fi
+            mkdir -p app/src/main/assets/tools
+            # 内置 APK 工具（L1/L2，来源均为官方 Release）
+            curl -sL -o app/src/main/assets/tools/apktool.jar \
+              "https://bitbucket.org/iBotPeaches/apktool/downloads/apktool_2.9.3.jar"
+            curl -sL -o app/src/main/assets/tools/jadx.zip \
+              "https://github.com/skylot/jadx/releases/download/v1.5.0/jadx-1.5.0.zip"
+            curl -sL -o app/src/main/assets/tools/radare2.tar.xz \
+              "https://github.com/radareorg/radare2/releases/download/5.9.8/radare2-5.9.8.tar.xz"
+            curl -sL -o app/src/main/assets/tools/rizin.tar.gz \
+              "https://github.com/rizinorg/rizin/releases/download/v0.7.4/rizin-v0.7.4-android-aarch64.tar.gz"
+            # Ubuntu 24.04 rootfs（proot-distro 官方 v4.18.0 资产）
+            curl -sL -o app/src/main/assets/ubuntu-rootfs.tar.xz \
+              "https://github.com/termux/proot-distro/releases/download/v4.18.0/ubuntu-noble-aarch64-pd-v4.18.0.tar.xz"
+            du -sh app/src/main/assets/tools app/src/main/assets/ubuntu-rootfs.tar.xz
           fi
 
       - name: 构建 APK ${abi}（注入插件 + 门禁 + gradle + 产物）

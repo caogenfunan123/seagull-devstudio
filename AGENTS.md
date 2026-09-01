@@ -217,9 +217,11 @@ cd ..\plugins\dsh-android-<pkg> && npm run build
   - `dsh-android-tool-installer`：`tool_install`/`tool_list` + `toolInstaller` 服务（L1 内建 apktool/jadx，L2 选装 radare2/rizin）。
 - **装配**：`scripts/profile-web.cordis.patch.yml` 的 insert 块加入上述 5 个插件；`scripts/build-apk.mjs` 的 `pluginDirs` 同步追加；`inject-snapshot.py` 扩展 `INJECT_FILES` 携带 `persona.md`。
 - **Ubuntu rootfs 构建链**：`scripts/build-ubuntu-rootfs.sh`（proot-distro 或 debootstrap 交叉构建，产出 `app/src/main/assets/ubuntu-rootfs.tar.xz` + sha256）、`scripts/launch_ubuntu_proot.sh`（独立启动器 + fake sysdata 挂载）、`scripts/setup_fake_sysdata.sh`（伪造 /proc）。rootfs 顶层含 `proot-entry.sh`（插件按 `${HOME}/.dsh/ubuntu-rootfs/proot-entry.sh` 调用）。
-- **CI**：移除冗余且必然失败的 `build-arm64.yml`；`build-apk.yml` 插件构建循环加入 5 个 Seagull 插件，快照从源重建失败时回退下载上游官方 `snapshot-*.tar.xz`。arm64 额外尝试构建 Ubuntu rootfs 资产（失败不阻塞）。
+- **CI**：移除冗余且必然失败的 `build-arm64.yml`；`build-apk.yml` 插件构建循环加入 5 个 Seagull 插件，快照从源重建失败时回退下载上游官方 `snapshot-*.tar.xz`。arm64 额外下载内置工具与 Ubuntu rootfs 资产（官方 Release）。
+- **内置工具资产（Seagull fork 0.13.2-seagull 起）**：`app/src/main/assets/tools/` 内置 apktool.jar / jadx.zip / radare2.tar.xz / rizin.tar.gz，`app/src/main/assets/ubuntu-rootfs.tar.xz` 内置 Ubuntu 24.04 rootfs。这三类大文件（jadx 105MB / ubuntu 64MB）**超 GitHub 100MB push 限制，不入库**（.gitignore `assets/tools/`、`assets/ubuntu-rootfs.tar.xz`），CI 构建时由 `build-apk.yml`「拉取内置工具与 Ubuntu rootfs 资产」步骤从官方 Release 下载到同路径。运行时由 `EngineManager.extractToolAssets()` 在快照解压后解到 `files/usr/share/<tool>/` + `files/home/.dsh/ubuntu-rootfs/`（含 proot-entry.sh 写入）；tool-installer 的 `runtimePrefix()/runtimeHome()` 用引擎注入 env（TERMUX__PREFIX/PREFIX/HOME）推导，回退 fork 包路径。
 - **presets/seagull-root/**：海鸥 3.0 完整提示（`SEAGULL_FULL_INSTRUCTIONS.md`）与 root-aware 运行时说明的源稿；运行时生效路径为插件注入（见 dsh-android-seagull），非 preset 目录直读。
 
 | 时间 | 版本 | 更新内容 | 更新者 |
 |---|---|---|---|
 | 2026-09-01 | 0.13.2-seagull | **Seagull fork 首版**：品牌化 + arm64-only + 5 个 @dsh-android 插件（seagull persona 注入 / root-ops / dev-tools / apk-tools / tool-installer）+ 真实 Ubuntu rootfs 构建链 + inject-snapshot 携 persona.md + 移除破坏性 build-arm64.yml + CI 插件构建与快照回退 | AI 开发助手 |
+| 2026-09-01 | 0.13.2-seagull | **内置工具资产落地**：assets/tools/*（apktool/jadx/radare2/rizin）+ assets/ubuntu-rootfs.tar.xz；EngineManager.extractToolAssets() 快照后解压至 usr/share + home/.dsh/ubuntu-rootfs；tool-installer 路径 env 化（TERMUX__PREFIX/PREFIX/HOME 推导）；CI 从官方 Release 下载工具资产（大文件不入库，规避 GitHub 100MB 限制）；rizin 源修正为 android-aarch64 官方资产 | AI 开发助手 |

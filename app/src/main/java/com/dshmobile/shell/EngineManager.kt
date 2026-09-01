@@ -5,6 +5,7 @@ import android.media.MediaScannerConnection
 import android.os.Environment
 import android.util.Log
 import java.io.File
+import java.io.InputStream
 import java.nio.file.Files
 import org.apache.commons.compress.archivers.tar.TarArchiveEntry
 import org.apache.commons.compress.archivers.tar.TarArchiveInputStream
@@ -109,6 +110,7 @@ class EngineManager(private val context: Context, private val pickToken: String?
         Log.e(TAG, "snapshot refresh: extract failed, kept old runtime")
         return false
       }
+      extractToolAssets() // 内置工具/ubuntu rootfs 解压（非致命，失败仅记录）
       restoreUserData(backup, dsh)
       backup.deleteRecursively()
       fingerprintFile().writeText(bundledFingerprint())
@@ -164,6 +166,134 @@ class EngineManager(private val context: Context, private val pickToken: String?
       Log.e(TAG, "snapshot extract failed", t)
       false
     }
+  }
+
+  /**
+   * Extract Seagull built-in developer tools from APK assets into the runtime.
+   *
+   * Layout mirrors tool-installer's registry install paths:
+   *   assets/tools/apktool.jar       -> files/usr/share/apktool/apktool.jar
+   *   assets/tools/jadx.zip          -> files/usr/share/jadx/
+   *   assets/tools/radare2.tar.xz    -> files/usr/share/radare2/
+   *   assets/tools/rizin.tar.gz      -> files/usr/share/rizin/
+   *   assets/ubuntu-rootfs.tar.xz    -> files/home/.dsh/ubuntu-rootfs/
+   *                                    + proot-entry.sh (plugin entry point)
+   *
+   * Optional: a missing asset is skipped; a failure logs and does not block
+   * engine startup. Runs after snapshot extraction (first launch + refresh).
+   */
+  fun extractToolAssets(): Boolean {
+    var ok = true
+    try {
+      copyAssetToFile("tools/apktool.jar", File(usrDir, "share/apktool/apktool.jar"))
+      extractTarAsset("tools/radare2.tar.xz", File(usrDir, "share/radare2"), "xz")
+      extractTarAsset("tools/rizin.tar.gz", File(usrDir, "share/rizin"), "gz")
+      extractZipAsset("tools/jadx.zip", File(usrDir, "share/jadx"))
+      extractTarAsset("ubuntu-rootfs.tar.xz", File(homeDir, ".dsh/ubuntu-rootfs"), "xz")
+      writeProotEntry(File(homeDir, ".dsh/ubuntu-rootfs/proot-entry.sh"))
+      Log.i(TAG, "tool assets extracted")
+    } catch (t: Throwable) {
+      Log.e(TAG, "tool asset extract failed (non-fatal)", t)
+      ok = false
+    }
+    return ok
+  }
+
+  /** Copy a single asset (jar etc.) to dest, overwriting, skipping if absent. */
+  private fun copyAssetToFile(asset: String, dest: File) {
+    if (!hasAsset(asset)) return
+    dest.parentFile?.mkdirs()
+    java.nio.file.Files.deleteIfExists(dest.toPath())
+    context.assets.open(asset).use { input ->
+      dest.outputStream().use { out -> input.copyTo(out) }
+    }
+    Log.i(TAG, "tool asset: $asset -> " + dest.absolutePath)
+  }
+
+  /** Extract a tar asset (xz or gzip) into dest, reusing the safe snapshot extractor. */
+  private fun extractTarAsset(asset: String, dest: File, comp: String) {
+    if (!hasAsset(asset)) return
+    dest.mkdirs()
+    context.assets.open(asset).use { input ->
+      val stream: InputStream =
+        if (comp == "gz") org.apache.commons.compress.compressors.gzip.GzipCompressorInputStream(input)
+        else XZCompressorInputStream(input)
+      val tar = TarArchiveInputStream(stream)
+      val destCanon = dest.canonicalPath
+      var entry: TarArchiveEntry? = tar.nextEntry
+      while (entry != null) {
+        val name = entry.name
+        val safe = !name.startsWith("/") && !name.contains("..")
+        if (safe && !entry.isDirectory) {
+          val target = File(dest, name).canonicalFile
+          if (target.canonicalPath.startsWith(destCanon + File.separator)) {
+            target.parentFile?.mkdirs()
+            java.nio.file.Files.deleteIfExists(target.toPath())
+            target.outputStream().use { out ->
+              val buf = ByteArray(64 * 1024)
+              var n = tar.read(buf)
+              while (n >= 0) { out.write(buf, 0, n); n = tar.read(buf) }
+            }
+          }
+        }
+        entry = tar.nextEntry
+      }
+    }
+    Log.i(TAG, "tool asset: $asset -> " + dest.absolutePath)
+  }
+
+  /** Extract a zip asset (jadx) into dest, zip-slip safe. */
+  private fun extractZipAsset(asset: String, dest: File) {
+    if (!hasAsset(asset)) return
+    dest.mkdirs()
+    val destCanon = dest.canonicalPath
+    context.assets.open(asset).use { input ->
+      val zip = org.apache.commons.compress.archivers.zip.ZipArchiveInputStream(input)
+      var e = zip.nextEntry
+      while (e != null) {
+        if (!e.isDirectory) {
+          val target = File(dest, e.name).canonicalFile
+          if (target.canonicalPath.startsWith(destCanon + File.separator)) {
+            target.parentFile?.mkdirs()
+            java.nio.file.Files.deleteIfExists(target.toPath())
+            target.outputStream().use { out ->
+              val buf = ByteArray(64 * 1024)
+              var n = zip.read(buf)
+              while (n >= 0) { out.write(buf, 0, n); n = zip.read(buf) }
+            }
+          }
+        }
+        e = zip.nextEntry
+      }
+    }
+    Log.i(TAG, "tool asset: $asset -> " + dest.absolutePath)
+  }
+
+  /** Write the proot-entry.sh launcher the dev-tools/apk-tools plugins invoke. */
+  private fun writeProotEntry(entry: File) {
+    entry.parentFile?.mkdirs()
+    val root = entry.parentFile.absolutePath
+    val script =
+      "#!/bin/bash\n" +
+        "# Seagull DevStudio Ubuntu container entry (rootfs top-level)\n" +
+        "set -eu\n" +
+        "ROOTFS_DIR=\"$(cd \"$(dirname \"${'$'}{BASH_SOURCE[0]}\")\" && pwd)\"\n" +
+        "PROOT_BIN=\"${'$'}{PROOT_BIN:-${'$'}(command -v proot || echo ${'$'}PREFIX/bin/proot)}\"\n" +
+        "exec \"${'$'}PROOT_BIN\" --link2symlink --kill-on-exit -0 -r \"${'$'}ROOTFS_DIR\" " +
+        "-b /dev -b /proc -b /sys -b /storage -b \"${'$'}{HOME}:${'$'}{HOME}\" -w \"${'$'}{HOME}\" /bin/bash \"${'$'}@\"\n"
+    java.nio.file.Files.deleteIfExists(entry.toPath())
+    entry.writeText(script)
+    entry.setExecutable(true, false)
+    Log.i(TAG, "proot-entry.sh written at " + entry.absolutePath)
+  }
+
+  /** Whether an asset exists in the APK (guards optional tools). */
+  private fun hasAsset(name: String): Boolean {
+    return try {
+      val dir = File(name).parent ?: ""
+      val names = context.assets.list(dir) ?: return false
+      names.contains(File(name).name)
+    } catch (t: Throwable) { false }
   }
 
   /**
