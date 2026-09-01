@@ -2,12 +2,16 @@
  * @dsh-android/dsh-android-tool-installer - three-tier tool registry & on-demand install.
  * L1 built-in (apktool/jadx, auto) / L2 user opt-in (radare2/rizin).
  * Provides toolInstaller service + tool_install / tool_list model tools.
+ *
+ * C 方案修复 (2026-09-01)：对齐 dsh-android-bridge 成功模式——
+ *   inject 声明 tools 硬依赖 + defineTool 包装工具，修复 ctx.get('tools') 静默 undefined。
  */
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { mkdirSync, existsSync, createWriteStream } from 'node:fs';
 import { dirname, join } from 'node:path';
 import https from 'node:https';
+import { defineTool } from '@deepseek-ai/dsh-tools';
 
 const execFileAsync = promisify(execFile);
 
@@ -72,8 +76,12 @@ function prootEntry() {
   return runtimeHome() + '/.dsh/ubuntu-rootfs/proot-entry.sh';
 }
 
-export function apply(ctx) {
-  const service = {
+function renderText(_a, v) {
+  return [{ type: 'text', text: typeof v === 'string' ? v : JSON.stringify(v) }];
+}
+
+function buildService() {
+  return {
     list() {
       return Object.entries(TOOL_REGISTRY).map(([name, info]) => ({
         name, tier: info.tier, type: info.type, install: info.install,
@@ -106,13 +114,10 @@ export function apply(ctx) {
       }
     },
   };
+}
 
-  ctx.provide('toolInstaller', service);
-
-  const tools = ctx.get('tools');
-  if (tools === undefined) return;
-  const disp = [];
-  disp.push(tools.register({
+function tools(service) {
+  const installTool = defineTool({
     name: 'tool_install',
     description: 'Install a development tool from the three-tier registry (apktool, jadx, radare2, rizin).',
     parameters: {
@@ -120,13 +125,27 @@ export function apply(ctx) {
       properties: { name: { type: 'string', description: 'Tool name to install.' } },
       required: ['name'],
     },
+    output: { schema: { type: 'object', additionalProperties: true }, render: renderText },
     async execute({ name }) { return service.install(name); },
-  }));
-  disp.push(tools.register({
+  });
+
+  const listTool = defineTool({
     name: 'tool_list',
     description: 'List all available tools with install status.',
     parameters: { type: 'object', properties: {}, required: [] },
+    output: { schema: { type: 'object', additionalProperties: true }, render: renderText },
     async execute() { return { ok: true, tools: service.list() }; },
-  }));
-  ctx.effect(() => () => disp.forEach((d) => d && d()));
+  });
+
+  return [installTool, listTool];
+}
+
+// C 方案：显式声明 tools 硬依赖（对齐 bridge/manage），修复 ctx.get('tools') 静默 undefined。
+export const inject = ['tools'];
+
+export function apply(ctx) {
+  const service = buildService();
+  ctx.provide('toolInstaller', service);
+  for (const t of tools(service))
+    ctx.tools.register(t);
 }
