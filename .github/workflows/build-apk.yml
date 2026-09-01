@@ -87,6 +87,12 @@ jobs:
           fi
           test -s "base/base-usr-${abi}.tar.xz" || { echo "缺 base/base-usr-${abi}.tar.xz"; exit 1; }
           cp "base/base-usr-${abi}.tar.xz" ".deploy-tmp/${bdir}/base-usr.tar.xz"
+          # base-dsh 同样是 LFS 指针（133B）→ 直连上游下载真实归档（含 home/.dsh 配置层）
+          if [ ! -s "base/base-dsh.tar.xz" ] || [ "$(wc -c < base/base-dsh.tar.xz)" -lt 1000 ]; then
+            echo "::warning:: base-dsh.tar.xz 为 LFS 指针，从上游 kelai141/dsh-mobile-apk 直连下载"
+            curl -sL -o base/base-dsh.tar.xz \
+              "https://media.githubusercontent.com/media/kelai141/dsh-mobile-apk/main/base/base-dsh.tar.xz"
+          fi
           if [ -f "base/base-dsh.tar.xz" ] && [ "$(wc -c < base/base-dsh.tar.xz)" -ge 1000 ]; then
             cp "base/base-dsh.tar.xz" ".deploy-tmp/${bdir}/base-dsh.tar.xz"
           fi
