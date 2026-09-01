@@ -1,0 +1,25 @@
+{
+  "resources": [
+    {
+      "key": "apktool_jar",
+      "path": "resources/apktool/apktool.jar",
+      "version": "2.9.3",
+      "source": "https://bitbucket.org/iBotPeaches/apktool/downloads/apktool_2.9.3.jar"
+    },
+    {
+      "key": "android_framework",
+      "path": "resources/apktool/android-framework.jar",
+      "version": "android-34"
+    },
+    {
+      "key": "jadx_cli",
+      "path": "resources/apktool/jadx.zip",
+      "version": "1.5.0",
+      "source": "https://github.com/skylot/jadx/releases/download/v1.5.0/jadx-1.5.0.zip"
+    }
+  ],
+  "execution": {
+    "engine": "ubuntu-proot",
+    "jvm": "openjdk-17-jdk-headless"
+  }
+}

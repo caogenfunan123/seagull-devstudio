@@ -12,6 +12,10 @@
       name: '@seagull/dsh-plugin-apk-tools'
     - id: seagull-tool-installer
       name: '@seagull/dsh-plugin-tool-installer'
+    - id: superuser
+      name: '@dsh-android/dsh-superuser'
+    - id: seagull
+      name: '@dsh-android/dsh-seagull'
     - id: shell-termux
       name: '@dsh-android/dsh-shell-termux'
       config:
