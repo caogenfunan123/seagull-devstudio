@@ -57,6 +57,8 @@ function pairFailText(j: PairOutcome): string {
 interface AdbStatusView {
   tier: 'T0' | 'T1'
   fullAccess: boolean
+  /** Seagull fork：KernelSU root 通道就绪（无需无线配对） */
+  rootChannel?: boolean
   writeMode?: string
   wirelessDebugOn?: boolean
   allowSwitchOn?: boolean
@@ -313,31 +315,42 @@ export function AdbAuthSection(_props: AdbAuthSectionProps) {
     [cancelConfirm],
   )
 
+  const rootReady = status?.rootChannel === true
   const granted = status?.tier?.startsWith('T1') === true
   const confirmText = confirm !== null ? CONFIRM_ALLOW_TEXT[confirm] : null
 
   return (
     <div className="adb-auth" data-plugin="adb-auth" onKeyDown={onKeyDown}>
-      <p className="adb-auth-note">
-        安卓调试授权三道门：完全访问档位（前置）→ 系统无线调试开启 → 应用内「允许访问」开关 → 输入配对码。
-        配对为真实握手（adb pair）：码值与端口取自系统「无线调试」弹窗（IP 固定 127.0.0.1），
-        配对码只在壳侧使用、绝不出壳。自动审批不构成开放条件；重启后需重新配对（安全特性）。
-        注意：点「配对」后页面会同步等待握手结果（最长约一分钟）而短暂冻结，属正常现象；
-        失败时输入框保留原值，按报错提示重试即可。
-      </p>
+      {rootReady ? (
+        <p className="adb-auth-note">
+          本设备已检测到 root 通道（KernelSU，/system/bin/su 可用）：ADB 无线调试配对**不再必要**，
+          root 操作由 root_ops 插件经 su 提权直接执行。以下 ADB 授权面板仅供需要经 adb shell
+          走系统通道的场景参考。
+        </p>
+      ) : (
+        <p className="adb-auth-note">
+          安卓调试授权三道门：完全访问档位（前置）→ 系统无线调试开启 → 应用内「允许访问」开关 → 输入配对码。
+          配对为真实握手（adb pair）：码值与端口取自系统「无线调试」弹窗（IP 固定 127.0.0.1），
+          配对码只在壳侧使用、绝不出壳。自动审批不构成开放条件；重启后需重新配对（安全特性）。
+          注意：点「配对」后页面会同步等待握手结果（最长约一分钟）而短暂冻结，属正常现象；
+          失败时输入框保留原值，按报错提示重试即可。
+        </p>
+      )}
 
-      <div className={granted ? 'adb-auth-tier adb-auth-tier-ok' : 'adb-auth-tier adb-auth-tier-bad'}>
-        <span>{granted ? '已授权（T1）' : '未授权（T0）'}</span>
+      <div className={granted ? 'adb-auth-tier adb-auth-tier-ok' : rootReady ? 'adb-auth-tier adb-auth-tier-ok' : 'adb-auth-tier adb-auth-tier-bad'}>
+        <span>
+          {granted ? '已授权（T1）' : rootReady ? '已就绪（root 通道）' : '未授权（T0）'}
+        </span>
         {status?.message ? <span className="adb-auth-tier-sub">{status.message}</span> : <span className="adb-auth-tier-sub">通道可用</span>}
       </div>
 
       <div className="adb-auth-gate">
         <div className="adb-auth-gate-main">
           <span className="adb-auth-gate-title">门1 · 完全访问档位（All Files Access）</span>
-          <span className="adb-auth-gate-desc">在系统设置授予「所有文件访问」；授予后重启引擎生效</span>
+          <span className="adb-auth-gate-desc">{rootReady ? 'root 通道已满足（KernelSU），无需额外授予' : '在系统设置授予「所有文件访问」；授予后重启引擎生效'}</span>
         </div>
         {status?.fullAccess
-          ? <span className="adb-auth-chip adb-auth-chip-ok">已授予</span>
+          ? <span className="adb-auth-chip adb-auth-chip-ok">{rootReady ? 'root 已就绪' : '已授予'}</span>
           : (
             <>
               <span className="adb-auth-chip adb-auth-chip-bad">未授予</span>
@@ -359,24 +372,32 @@ export function AdbAuthSection(_props: AdbAuthSectionProps) {
       <div className="adb-auth-gate">
         <div className="adb-auth-gate-main">
           <span className="adb-auth-gate-title">门2 · 系统无线调试</span>
-          <span className="adb-auth-gate-desc">开发者选项 → 无线调试（配对成功即视为已开启）</span>
+          <span className="adb-auth-gate-desc">{rootReady ? 'root 通道已满足，无需开启无线调试' : '开发者选项 → 无线调试（配对成功即视为已开启）'}</span>
         </div>
         {status?.wirelessDebugOn
           ? <span className="adb-auth-chip adb-auth-chip-ok">已开启</span>
-          : <span className="adb-auth-chip adb-auth-chip-bad">未开启</span>}
+          : rootReady
+            ? <span className="adb-auth-chip adb-auth-chip-ok">无需开启</span>
+            : <span className="adb-auth-chip adb-auth-chip-bad">未开启</span>}
       </div>
 
-      <label className="adb-auth-switch-row">
-        <input
-          type="checkbox"
-          checked={status?.allowSwitchOn ?? false}
-          disabled={busy}
-          onChange={(e) => askAllow(e.target.checked)}
-        />
-        <span>门3 · 应用内「允许访问」开关（关闭即失败关闭）</span>
-      </label>
+      {!rootReady && (
+        <label className="adb-auth-switch-row">
+          <input
+            type="checkbox"
+            checked={status?.allowSwitchOn ?? false}
+            disabled={busy}
+            onChange={(e) => askAllow(e.target.checked)}
+          />
+          <span>门3 · 应用内「允许访问」开关（关闭即失败关闭）</span>
+        </label>
+      )}
 
-      {status?.paired ? (
+      {rootReady ? (
+        <div className="adb-auth-pair">
+          <span className="adb-auth-chip adb-auth-chip-ok">root 通道已配对（KernelSU su）</span>
+        </div>
+      ) : status?.paired ? (
         <div className="adb-auth-pair">
           <span className="adb-auth-chip adb-auth-chip-ok">已配对</span>
           {status.connected === true

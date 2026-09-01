@@ -31,6 +31,8 @@ export interface AdbStatus {
   tier: PrivilegeTier
   /** 完全访问档位（All Files Access，系统权限；门1 前置） */
   fullAccess: boolean
+  /** Seagull fork：KernelSU root 通道就绪（替代 ADB 三道门，无需配对） */
+  rootChannel?: boolean
   /** 写面档位（shell-termux sandboxMode；第二独立前置，非 danger 不构成开放条件） */
   writeMode?: string
   /** 系统无线调试已开启（第一道人门，应用不可程序化开启） */
@@ -125,9 +127,26 @@ function readShellAdbState(): ShellAdbPrefs | undefined {
 }
 
 /**
+ * KernelSU root 通道探测：/system/bin/su 存在且可由引擎（app 同 UID）执行。
+ * Seagull fork：设备为 KernelSU root 时，ADB 配对不再必要——root 通道已满足授权，
+ * 免去「请配对」骚扰。探测只判存在性（不真正提权，避免安全面），执行由 root_ops 插件承担。
+ */
+function detectRootChannel(): boolean {
+  try {
+    const p = '/system/bin/su'
+    const st = statSync(p)
+    return st.isFile() && (st.mode & 0o111) !== 0
+  } catch {
+    return false
+  }
+}
+
+/**
  * 授权事实解析（2026-08-23 审校 C6/C7——引擎级 × 会话级两维模型）：
  * - **引擎级（用户是否授权）**：门1 All Files Access（DSH_ADB_FULLACCESS）+ 门2 允许开关
  *   + 门3 配对（live 壳侧 SharedPreferences）+ 无线调试（=paired 间接证明）——设备全局事实；
+ * - **Seagull fork root 通道**：设备有 KernelSU su 时，授权事实视为已满足（T1 候选），
+ *   无需无线调试配对；root_ops 插件直接经 su 提权。
  * - **会话级（AI 能否获取）**：dsh-sandbox-policy 的当前会话档位（resolve({session})，实时）
  *   ——通道工具在每个 execute 按 `exec.agent.session` resolve；≠'danger-full-access' 即拒绝；
  * - 写面档位默认（sandboxPolicy.defaultMode）只作全局视图/引导显示；自动审批不参与判定。
@@ -141,25 +160,32 @@ function currentStatus(env: NodeJS.ProcessEnv, defaultWriteMode?: string): AdbSt
   const paired = live ? live.paired : env.DSH_ADB_PAIRED === '1'
   const wirelessDebugOn = live ? live.paired : env.DSH_ADB_WIRELESS === '1'
   const connected = live ? live.connected === true : false
-  const authorized = fullAccess && allowSwitchOn && paired && wirelessDebugOn
-  const tier: PrivilegeTier = authorized && writeMode === 'danger-full-access' ? 'T1' : 'T0'
+  // Seagull fork：KernelSU root 通道探测——仅信息位（UI/状态文案提示 root 可用），
+  // 绝不翻转 ADB 授权门（engineLevelReady 仍以真实配对为准；ADB 工具未配对失败关闭）。
+  const rootChannel = detectRootChannel()
+  // 真实 ADB 授权事实（三道门，root 通道不掺入——防止 ADB 工具被放行后底层无连接）。
+  const adbAuthorized = fullAccess && allowSwitchOn && paired && wirelessDebugOn
+  const tier: PrivilegeTier = adbAuthorized && writeMode === 'danger-full-access' ? 'T1' : 'T0'
   return {
     tier,
     fullAccess,
+    rootChannel,
     writeMode,
     wirelessDebugOn,
     allowSwitchOn,
     paired,
     connected,
-    message: authorized
-      ? writeMode === 'danger-full-access'
-        ? connected === false
-          ? '已配对——连接待建立：执行时自动重连；仍失败请核对「无线调试」弹窗端口或重新配对'
-          : undefined
-        : `已授权（引擎级）——当前部署档位 ${writeMode}，会话内档位实时判定（/permission danger-full-access 可即时开放）`
-      : !fullAccess
-        ? '未授权：需先授予系统「所有文件访问」（完全访问档位，授予后重启引擎生效）——自动审批模式不构成开放条件'
-        : '未授权：请在「开发者选项 → 无线调试」开启并输入配对码与弹窗端口（授权状态在重启后需重新配对）',
+    message: rootChannel
+      ? 'root 通道已就绪（KernelSU）——设备控制无需无线调试配对：请使用 root_ops 的 root_exec / device_ui_control（su 提权）；ADB 通道未配对仍失败关闭'
+      : adbAuthorized
+        ? writeMode === 'danger-full-access'
+          ? connected === false
+            ? '已配对——连接待建立：执行时自动重连；仍失败请核对「无线调试」弹窗端口或重新配对'
+            : undefined
+          : `已授权（引擎级）——当前部署档位 ${writeMode}，会话内档位实时判定（/permission danger-full-access 可即时开放）`
+        : !fullAccess
+          ? '未授权：需先授予系统「所有文件访问」（完全访问档位，授予后重启引擎生效）——自动审批模式不构成开放条件'
+          : '未授权：请在「开发者选项 → 无线调试」开启并输入配对码与弹窗端口（授权状态在重启后需重新配对）',
     }
   }
 

@@ -183,14 +183,23 @@ class EngineManager(private val context: Context, private val pickToken: String?
    * engine startup. Runs after snapshot extraction (first launch + refresh).
    */
   fun extractToolAssets(): Boolean {
+    // 幂等：已解压过（apktool.jar + proot-entry.sh + rootfs 关键 bin/bash 都在）则跳过——
+    // startEngine 每次都会调本方法，不能每次全量重解压 200MB+；
+    // rootfs 的 bin/bash 是容器可启动的最硬落点，缺失则视为解压不完整需重解。
+    val apkJar = File(usrDir, "share/apktool/apktool.jar")
+    val prootEntry = File(homeDir, ".dsh/ubuntu-rootfs/proot-entry.sh")
+    val rootfsBash = File(homeDir, ".dsh/ubuntu-rootfs/bin/bash")
+    if (apkJar.exists() && prootEntry.exists() && rootfsBash.exists()) {
+      return true
+    }
     var ok = true
     try {
-      copyAssetToFile("tools/apktool.jar", File(usrDir, "share/apktool/apktool.jar"))
+      copyAssetToFile("tools/apktool.jar", apkJar)
       extractTarAsset("tools/radare2.tar.xz", File(usrDir, "share/radare2"), "xz")
       extractTarAsset("tools/rizin.tar.gz", File(usrDir, "share/rizin"), "gz")
       extractZipAsset("tools/jadx.zip", File(usrDir, "share/jadx"))
       extractTarAsset("ubuntu-rootfs.tar.xz", File(homeDir, ".dsh/ubuntu-rootfs"), "xz")
-      writeProotEntry(File(homeDir, ".dsh/ubuntu-rootfs/proot-entry.sh"))
+      writeProotEntry(prootEntry)
       Log.i(TAG, "tool assets extracted")
     } catch (t: Throwable) {
       Log.e(TAG, "tool asset extract failed (non-fatal)", t)
@@ -210,29 +219,50 @@ class EngineManager(private val context: Context, private val pickToken: String?
     Log.i(TAG, "tool asset: $asset -> " + dest.absolutePath)
   }
 
-  /** Extract a tar asset (xz or gzip) into dest, reusing the safe snapshot extractor. */
+  /**
+   * Extract a tar asset (xz or gzip) into dest.
+   * Mirrors SnapshotExtractor safety: handles dir/symlink/regular files, rejects
+   * absolute paths and ../ traversal, and only writes inside dest. proot-distro
+   * rootfs tarballs are full of `bin -> usr/bin` symlinks — dropping them (as the
+   * first version did) breaks /bin,/lib and the container cannot start.
+   */
   private fun extractTarAsset(asset: String, dest: File, comp: String) {
     if (!hasAsset(asset)) return
     dest.mkdirs()
+    val destCanon = dest.canonicalPath
     context.assets.open(asset).use { input ->
       val stream: InputStream =
         if (comp == "gz") org.apache.commons.compress.compressors.gzip.GzipCompressorInputStream(input)
         else XZCompressorInputStream(input)
       val tar = TarArchiveInputStream(stream)
-      val destCanon = dest.canonicalPath
       var entry: TarArchiveEntry? = tar.nextEntry
       while (entry != null) {
-        val name = entry.name
-        val safe = !name.startsWith("/") && !name.contains("..")
-        if (safe && !entry.isDirectory) {
-          val target = File(dest, name).canonicalFile
-          if (target.canonicalPath.startsWith(destCanon + File.separator)) {
-            target.parentFile?.mkdirs()
-            java.nio.file.Files.deleteIfExists(target.toPath())
-            target.outputStream().use { out ->
-              val buf = ByteArray(64 * 1024)
-              var n = tar.read(buf)
-              while (n >= 0) { out.write(buf, 0, n); n = tar.read(buf) }
+        val target = resolveAssetEntry(dest, destCanon, entry)
+        if (target != null) {
+          when {
+            entry.isDirectory -> target.mkdirs()
+            entry.isSymbolicLink -> {
+              target.parentFile?.mkdirs()
+              val linkCanon = File(target.parentFile, entry.linkName).canonicalPath
+              if (linkCanon.startsWith(destCanon + File.separator)) {
+                java.nio.file.Files.deleteIfExists(target.toPath())
+                java.nio.file.Files.createSymbolicLink(
+                  target.toPath(), java.nio.file.Paths.get(entry.linkName),
+                )
+              } else {
+                Log.w(TAG, "skip unsafe symlink: " + entry.name + " -> " + entry.linkName)
+              }
+            }
+            else -> {
+              target.parentFile?.mkdirs()
+              java.nio.file.Files.deleteIfExists(target.toPath())
+              target.outputStream().use { out ->
+                val buf = ByteArray(64 * 1024)
+                var n = tar.read(buf)
+                while (n >= 0) { out.write(buf, 0, n); n = tar.read(buf) }
+              }
+              // preserve exec bit for binaries (harmless if kernel ignores it)
+              target.setExecutable(entry.mode and 0x40 != 0, true)
             }
           }
         }
@@ -240,6 +270,19 @@ class EngineManager(private val context: Context, private val pickToken: String?
       }
     }
     Log.i(TAG, "tool asset: $asset -> " + dest.absolutePath)
+  }
+
+  /** Resolve a tar entry inside dest, rejecting absolute paths and ../ traversal. */
+  private fun resolveAssetEntry(dest: File, destCanon: String, entry: TarArchiveEntry): File? {
+    val name = entry.name.replace('\\', '/').trimStart('/')
+    if (name.isEmpty() || name.contains("..")) return null
+    val target = File(dest, name)
+    return try {
+      val parentCanon = (target.parentFile?.canonicalPath ?: destCanon)
+      if (parentCanon.startsWith(destCanon + File.separator) || parentCanon == destCanon) target else null
+    } catch (_: Exception) {
+      null
+    }
   }
 
   /** Extract a zip asset (jadx) into dest, zip-slip safe. */
@@ -641,6 +684,9 @@ class EngineManager(private val context: Context, private val pickToken: String?
       Log.e(TAG, "engine start failed: termux-exec preload missing at " + preload.absolutePath)
       return false
     }
+    // Seagull fork：每次引擎启动前确保内置工具/Ubuntu rootfs 就位（幂等；hasAsset 守卫 + 覆盖写）。
+    // 修复：先装无工具首包、后装带工具新包时快照指纹不变 → refreshSnapshot 不跑 → 工具装不上。
+    extractToolAssets()
     val now = System.currentTimeMillis()
     // Process-level CAS: only one concurrent call really starts (device-measured EADDRINUSE double-start).
     if (!STARTING.compareAndSet(false, true)) return true

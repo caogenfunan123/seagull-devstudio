@@ -30,7 +30,10 @@ const MIRRORS = [
 // 壳侧用「adb pair」真实配对握手（码值不出壳），引擎侧用「adb connect/shell」经本机 adbd（shell uid）执行。
 // 注：termux 无 `licenses` 包（实测索引不存在）——usr/share/LICENSES 标准文本来自基座 bootstrap 或本脚本的
 // 仓库 LICENSE 复制（见 ensureLicenseTexts；x64 基座曾缺 → 架构无关确定化）。
-const TARGETS = ['python', 'python-pip', 'perl', 'ruby', 'ripgrep', 'zip', 'vim', 'openssl', 'openssl-tool', 'zsh', 'socat', 'busybox', 'dpkg', 'termux-exec', 'termux-elf-cleaner', 'termux-keyring', 'android-tools', 'git']
+// Seagull fork：+ proot（Ubuntu 容器启动命根，97KB + libtalloc/libandroid-shmem 两依赖，
+// BFS 自动闭包；无它则 ubuntu-rootfs 解压了也起不来）。apktool/jadx/java 走
+// install-java-tools.sh 按需安装器（体量大不入常驻，避免快照膨胀）。
+const TARGETS = ['python', 'python-pip', 'perl', 'ruby', 'ripgrep', 'zip', 'vim', 'openssl', 'openssl-tool', 'zsh', 'socat', 'busybox', 'dpkg', 'termux-exec', 'termux-elf-cleaner', 'termux-keyring', 'android-tools', 'git', 'proot']
 const NEW_PREFIX = '/data/user/0/com.dsharnessmobile.shell/files/usr'
 const OLD_PREFIX = '/data/data/com.termux/files/usr'
 const BASE_DIR = join(ROOT, '.deploy-tmp', ABI === 'arm64' ? 'arm64-base' : 'x64-base')
@@ -581,6 +584,64 @@ echo "[install-clang] 完成：$("$B/bin/clang" --version | head -1)"
 `
 writeFileSync(join(U, 'bin', 'install-clang.sh'), installClangSh, { mode: 0o755 })
 log('install-clang.sh 就位（usr/bin，按需 C 工具链安装器）')
+
+// ── install-java-tools.sh（Seagull fork：APK 逆向/打包工具链按需安装器）──
+// apktool/jadx/apksigner/aapt2 均为 Java 程序，依赖 openjdk-21（Termux 包，106MB）。
+// 体量过大不宜常驻快照 → 与 clang 同款「apt download-only + dpkg-deb 解包」按需安装，
+// 绕开 app 域 dpkg.cfg.d EACCES（AGENTS.md 坑 13/W6 同一根因）。
+// 落点：usr/bin/{java,javac,apktool,jadx,apksigner,aapt2}（宿主直接可调，不经容器）。
+const installJavaToolsSh = `#!/system/bin/sh
+# dsh-mobile Seagull fork: APK 逆向/打包工具链按需安装器（apt download-only + dpkg-deb 解包）
+# 装 openjdk-21 + apktool + jadx + apksigner + aapt2；宿主 PATH 即用，不经 Ubuntu 容器。
+set -e
+B="\${TERMUX__PREFIX:-${PKG_PREFIX}}"
+export PATH="$B/bin:$PATH"
+export LD_LIBRARY_PATH="$B/lib"
+export LD_PRELOAD="$B/lib/libtermux-exec-ld-preload.so"
+export HOME="\${HOME:-$B/../home}"
+export TMPDIR="$HOME/tmp"
+mkdir -p "$TMPDIR"
+export TERMUX__PREFIX="$B" TERMUX_PREFIX="$B"
+export APT_CONFIG="$B/etc/apt/apt.conf"
+export OPENSSL_CONF="$B/etc/tls/openssl.cnf"
+PKGS="openjdk-21 apktool jadx apksigner aapt2"
+echo "[install-java-tools] apt-get update…"
+apt-get update || echo "[install-java-tools] 警告：apt update 部分失败，继续用已缓存列表"
+echo "[install-java-tools] 下载依赖（download-only）…"
+apt-get install -y --download-only $PKGS
+echo "[install-java-tools] 解包（Termux deb 内嵌设备路径，usr 层平移）…"
+TMPX="$B/../ext-java-tmp"
+mkdir -p "$TMPX"
+cd "$B/var/cache/apt/archives"
+found=0
+for deb in *.deb; do
+  case "$deb" in
+    openjdk-21_*|apktool_*|jadx_*|apksigner_*|aapt2_*|libandroid-shmem_*|libandroid-spawn_*|libiconv_*|libjpeg-turbo_*|zlib_*|littlecms_*|alsa-plugins_*|abseil-cpp_*|libprotobuf_*|fmt_*|libc++_*|libexpat_*|libpng_*|libzopfli_*|liblz4_*|liblzma_*|libmagic_*|libzip_*|libexecinfo_*|tree-sitter_*|xxhash_*|zstd_*|capstone_*) ;;
+    *) continue ;;
+  esac
+  rm -rf "$TMPX/data"
+  "$B/bin/dpkg-deb" -x "$deb" "$TMPX" || continue
+  cp -a "$TMPX/data/data/com.termux/files/usr/." "$B/"
+  found=1
+done
+rm -rf "$TMPX"
+[ "$found" = "1" ] || { echo "[install-java-tools] 错误：缓存中无目标包（apt 下载失败？）"; exit 1; }
+# java/javac 入口：openjdk postinst 经 update-alternatives 建链，data 树常无 bin/java → 显式补。
+if ! [ -e "$B/bin/java" ]; then
+  JRE_BIN="$(find "$B" -path '*/bin/java' -type f 2>/dev/null | head -1)"
+  if [ -n "$JRE_BIN" ]; then
+    ln -sf "$JRE_BIN" "$B/bin/java"
+    ln -sf "$(dirname "$JRE_BIN")/javac" "$B/bin/javac" 2>/dev/null || true
+  fi
+fi
+echo "[install-java-tools] 冒烟验证…"
+"$B/bin/java" -version 2>&1 | head -1
+if [ -x "$B/bin/apktool" ]; then "$B/bin/apktool" --version 2>/dev/null | head -1 || true; fi
+if [ -x "$B/bin/jadx" ]; then "$B/bin/jadx" --version 2>/dev/null | head -1 || true; fi
+echo "[install-java-tools] 完成"
+`
+writeFileSync(join(U, 'bin', 'install-java-tools.sh'), installJavaToolsSh, { mode: 0o755 })
+log('install-java-tools.sh 就位（usr/bin，按需 APK 工具链安装器）')
 
 // ── 7e. 错位目录剔除（issue #80 P5，2026-08-24）：relocate-snapshot 历史上会把
 // 包内绝对路径 `/data/data/com.termux/...` 当作相对路径搬进 usr 树（如
