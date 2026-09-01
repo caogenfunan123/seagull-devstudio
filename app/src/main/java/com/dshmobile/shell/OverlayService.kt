@@ -483,7 +483,7 @@ class OverlayService : Service() {
           .put("rpcId", "overlay-" + System.currentTimeMillis())
           .put("method", "session.cancel")
           .put("payload", JSONObject().put("sessionId", activeSessionId))
-        val conn = URL("http://127.0.0.1:3080/api/session.cancel").openConnection() as HttpURLConnection
+        val conn = URL(EngineProbe.ENGINE_URL + "/api/session.cancel").openConnection() as HttpURLConnection
         conn.requestMethod = "POST"
         conn.doOutput = true
         conn.connectTimeout = 3000

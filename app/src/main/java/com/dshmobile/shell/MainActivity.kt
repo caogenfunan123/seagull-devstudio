@@ -492,7 +492,7 @@ class MainActivity : ComponentActivity() {
     // 引擎侧插件端点：路径交给 dsh-android-file-open 强制新会话（引擎未起时端点由启动流承托）。
     Thread {
       try {
-        val conn = java.net.URL("http://127.0.0.1:3080/api/android/file-incoming").openConnection() as java.net.HttpURLConnection
+        val conn = java.net.URL(EngineProbe.ENGINE_URL + "/api/android/file-incoming").openConnection() as java.net.HttpURLConnection
         conn.requestMethod = "POST"
         conn.doOutput = true
         conn.connectTimeout = 3000

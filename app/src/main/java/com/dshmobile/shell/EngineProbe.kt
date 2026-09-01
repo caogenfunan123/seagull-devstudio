@@ -4,10 +4,16 @@ import java.net.HttpURLConnection
 import java.net.URL
 import org.json.JSONObject
 
-/** Probes the local dsh web engine (127.0.0.1:3080) from the shell side. */
+/**
+ * Probes the local dsh web engine from the shell side.
+ * Seagull fork: engine port moved to 32080 (upstream uses 3080, which the
+ * original dsh-mobile instance on the same device also binds — two engines
+ * would fight for 3080). Kept in one constant so probe/start/URL all agree.
+ */
 object EngineProbe {
 
-  const val ENGINE_URL = "http://127.0.0.1:3080"
+  const val ENGINE_PORT = 32080
+  const val ENGINE_URL = "http://127.0.0.1:$ENGINE_PORT"
 
   /**
    * One-shot reachability probe. Safe on any thread (never the main thread).

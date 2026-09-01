@@ -632,7 +632,7 @@ class EngineManager(private val context: Context, private val pickToken: String?
   }
 
   /** Start the dsh web engine from the embedded snapshot. */
-  fun startEngine(port: Int = 3080): Boolean {
+  fun startEngine(port: Int = EngineProbe.ENGINE_PORT): Boolean {
     // LD_PRELOAD depends on the snapshot's termux-exec lib: when missing, every child exec fails,
     // and combined with the cooldown window that means a silent 90s engine outage — assert explicitly
     // before starting and fail loudly if absent.
@@ -650,7 +650,7 @@ class EngineManager(private val context: Context, private val pickToken: String?
     // poll engine reachability themselves, so this never causes a wrong wait, but it must not be
     // read as proof of success.
     // 2026-08-23 修复（审核 CRITICAL#1，用户实测"重试不 kill 旧引擎进程"）：冷却窗内若引擎
-    // 实际不可达（探活 down），冷却窗不应阻止重试——旧实现让挂死进程占着 3080 直到 EADDRINUSE。
+    // 实际不可达（探活 down），冷却窗不应阻止重试——旧实现让挂死进程占着引擎端口直到 EADDRINUSE。
     // 同时 startEngine 前必须先终结残留进程：destroy() 仅 SIGTERM，引擎挂死时需 destroyForcibly。
     val withinCooldown = now - EngineManager.lastStartAttemptAt < START_COOLDOWN_MS
     val engineReachable = try { EngineProbe.check(300).optBoolean("running", false) } catch (_: Exception) { false }
@@ -861,7 +861,7 @@ class EngineManager(private val context: Context, private val pickToken: String?
   }
 
   /**
-   * 引擎进程存活判定（0.13.0 启动超时 D1 的事实源）：进程句柄活着，或 3080 已可达，
+   * 引擎进程存活判定（0.13.0 启动超时 D1 的事实源）：进程句柄活着，或引擎端口已可达，
    * 即视为「引擎还在」（冷启动 20-45s 中轮询窗口内不许宣判失败）。两者皆否才返回 false。
    * 供 startEngineFlow 的超时语义使用——进程活着就继续等，只有进程死才触发回退。
    */
