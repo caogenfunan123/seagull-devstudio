@@ -13,13 +13,15 @@
 name: build-apk
 
 on:
+  push:
+    branches: [main]
   workflow_dispatch:
     inputs:
       abi:
-        description: '目标 ABI（可多选）'
+        description: '目标 ABI'
         type: choice
-        options: [arm64, x86_64, 'both']
-        default: 'both'
+        options: [arm64]
+        default: 'arm64'
       suffix:
         description: 'APK 版本后缀（默认空=正式版纯净版本号；测试构建显式传 -fix 等）'
         type: string
@@ -30,17 +32,18 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        abi: [arm64, x86_64]
+        # Seagull fork：仅 arm64（用户设备即 arm64，x86_64 不再构建）
+        abi: [arm64]
       fail-fast: false
     env:
       # build-apk.mjs 依赖本仓库顶层 scripts/plugins/vendor/base；apk 仓库 = $GITHUB_WORKSPACE
       DSH_APK_DIR: ${{ github.workspace }}
     steps:
-      - name: 检出本仓库（含 Git LFS 底座归档）
+      - name: 检出本仓库（不含 LFS——fork 未传底座对象，改由下步从上游直连下载）
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          lfs: true
+          lfs: false
 
       - name: 准备运行时（node；dsh-client-ui-responsive 的 tsdown 要求 node ^22.18 || >=24.11）
         uses: actions/setup-node@v4
@@ -68,7 +71,7 @@ jobs:
             node scripts/build-plugin.mjs "$p"
           done
 
-      - name: stage 底座归档（base/ -> .deploy-tmp/<base-dir>/）
+      - name: stage 底座归档（base/ -> .deploy-tmp/<base-dir>/；LFS 指针则从上游直连下载）
         shell: bash
         run: |
           set -e
@@ -76,9 +79,17 @@ jobs:
           # build-snapshot-013.mjs 的 BASE_DIR：arm64 -> arm64-base；x86_64 -> x64-base（缩写，勿写 x86_64-base）
           if [ "$abi" = "arm64" ]; then bdir="arm64-base"; else bdir="x64-base"; fi
           mkdir -p ".deploy-tmp/${bdir}"
-          [ -f "base/base-usr-${abi}.tar.xz" ] || { echo "缺 base/base-usr-${abi}.tar.xz"; exit 1; }
+          # fork 未上传 LFS 底座对象：base-usr-*.tar.xz 是 133B LFS 指针 → 从上游 media 直连下载真实归档
+          if [ ! -s "base/base-usr-${abi}.tar.xz" ] || [ "$(wc -c < base/base-usr-${abi}.tar.xz)" -lt 1000 ]; then
+            echo "::warning:: base-usr-${abi}.tar.xz 为 LFS 指针，从上游 kelai141/dsh-mobile-apk 直连下载"
+            curl -sL -o base/base-usr-${abi}.tar.xz \
+              "https://media.githubusercontent.com/media/kelai141/dsh-mobile-apk/main/base/base-usr-${abi}.tar.xz"
+          fi
+          test -s "base/base-usr-${abi}.tar.xz" || { echo "缺 base/base-usr-${abi}.tar.xz"; exit 1; }
           cp "base/base-usr-${abi}.tar.xz" ".deploy-tmp/${bdir}/base-usr.tar.xz"
-          [ -f "base/base-dsh.tar.xz" ] && cp "base/base-dsh.tar.xz" ".deploy-tmp/${bdir}/base-dsh.tar.xz"
+          if [ -f "base/base-dsh.tar.xz" ] && [ "$(wc -c < base/base-dsh.tar.xz)" -ge 1000 ]; then
+            cp "base/base-dsh.tar.xz" ".deploy-tmp/${bdir}/base-dsh.tar.xz"
+          fi
           du -sh ".deploy-tmp/${bdir}"
 
       - name: 构建快照 ${abi}（build-snapshot，Termux 源装配 + 注入 + 门禁 + 归档）
