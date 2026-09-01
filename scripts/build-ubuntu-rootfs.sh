@@ -32,6 +32,9 @@ apt-get install -y --no-install-recommends \
     python3-pip \
     python3-venv \
     openjdk-17-jdk-headless \
+    apktool \
+    zipalign \
+    apksigner \
     unzip \
     zip \
     tar \

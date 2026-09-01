@@ -8,6 +8,8 @@
       name: '@seagull/dsh-plugin-root-ops'
     - id: seagull-dev-tools
       name: '@seagull/dsh-plugin-dev-tools'
+    - id: seagull-apk-tools
+      name: '@seagull/dsh-plugin-apk-tools'
     - id: shell-termux
       name: '@dsh-android/dsh-shell-termux'
       config:
