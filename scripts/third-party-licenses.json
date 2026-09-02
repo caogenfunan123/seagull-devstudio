@@ -86,7 +86,18 @@
     "zip": "Info-ZIP License",
     "zlib": "Zlib",
     "zsh": "MIT-style (zsh)",
-    "zstd": "BSD-3-Clause"
+    "zstd": "BSD-3-Clause",
+    "proot": "GPL-2.0",
+    "libtalloc": "GPL-3.0",
+    "libandroid-shmem": "BSD 3-Clause",
+    "libandroid-spawn": "BSD 2-Clause"
   },
-  "copyleftFamilies": ["GPL-1.0+", "GPL-2.0", "GPL-2.0+", "GPL-3.0+", "LGPL-2.1+", "LGPL-3.0+"]
+  "copyleftFamilies": [
+    "GPL-1.0+",
+    "GPL-2.0",
+    "GPL-2.0+",
+    "GPL-3.0+",
+    "LGPL-2.1+",
+    "LGPL-3.0+"
+  ]
 }

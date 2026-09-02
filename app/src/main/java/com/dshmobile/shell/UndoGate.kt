@@ -115,7 +115,19 @@ object UndoGate {
         environment()["OPENSSL_CONF"] = File(engine.usrDir, "etc/tls/openssl.cnf").absolutePath
         redirectErrorStream(true)
       }
-      val proc = pb.start()
+      // 2026-09-02 Seagull fork：app 域直接 exec app-data ELF 恒 EACCES（error=13，与引擎
+      // startWithArgs 同根因）——紧急 CLI 也须走 /system/bin/linker64 加载，否则自动回退永不可用
+      // （真机日志：UndoGate.runCli 反复 "Cannot run program .../node: Permission denied"）。
+      val proc = try {
+        pb.start()
+      } catch (e: java.io.IOException) {
+        if (e.message?.contains("Permission denied") != true) throw e
+        Log.w(TAG, "emergency CLI direct exec denied, falling back to linker64: " + e.message)
+        ProcessBuilder(listOf("/system/bin/linker64") + cmd).apply {
+          environment().putAll(pb.environment())
+          redirectErrorStream(true)
+        }.start()
+      }
       val text = proc.inputStream.bufferedReader().use { it.readText() }
       if (!proc.waitFor(60, java.util.concurrent.TimeUnit.SECONDS)) {
         proc.destroy()

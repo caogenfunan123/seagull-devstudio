@@ -183,6 +183,15 @@ class EngineManager(private val context: Context, private val pickToken: String?
    * engine startup. Runs after snapshot extraction (first launch + refresh).
    */
   fun extractToolAssets(): Boolean {
+    // 并发锁（companion 级）：MainActivity 与 EngineService 各持一个 EngineManager 实例，
+    // 启动流程可能并发进入 startEngine → 并发重解压同一批资产 → symlink 撞车
+    // （真机实测 FileAlreadyExistsException）。单飞：谁先拿到锁谁解，后到者复用结果。
+    synchronized(TOOL_EXTRACT_LOCK) {
+      return extractToolAssetsLocked()
+    }
+  }
+
+  private fun extractToolAssetsLocked(): Boolean {
     // 幂等：已解压过（apktool.jar + proot-entry.sh + rootfs 关键 bin/bash 都在）则跳过——
     // startEngine 每次都会调本方法，不能每次全量重解压 200MB+；
     // rootfs 的 bin/bash 是容器可启动的最硬落点，缺失则视为解压不完整需重解。
@@ -198,7 +207,10 @@ class EngineManager(private val context: Context, private val pickToken: String?
       extractTarAsset("tools/radare2.tar.xz", File(usrDir, "share/radare2"), "xz")
       extractTarAsset("tools/rizin.tar.gz", File(usrDir, "share/rizin"), "gz")
       extractZipAsset("tools/jadx.zip", File(usrDir, "share/jadx"))
-      extractTarAsset("ubuntu-rootfs.tar.xz", File(homeDir, ".dsh/ubuntu-rootfs"), "xz")
+      // proot-distro rootfs：tar 顶层是单目录（如 ubuntu-noble-aarch64/）——剥离，
+      // 否则 bin/bash 落在 .../ubuntu-noble-aarch64/bin/bash，proot-entry 的 ROOTFS_DIR
+      // 指向 .dsh/ubuntu-rootfs 时找不到 /bin/bash，容器必挂（真机日志实锤）。
+      extractTarAsset("ubuntu-rootfs.tar.xz", File(homeDir, ".dsh/ubuntu-rootfs"), "xz", stripTopDir = true)
       writeProotEntry(prootEntry)
       Log.i(TAG, "tool assets extracted")
     } catch (t: Throwable) {
@@ -225,11 +237,31 @@ class EngineManager(private val context: Context, private val pickToken: String?
    * absolute paths and ../ traversal, and only writes inside dest. proot-distro
    * rootfs tarballs are full of `bin -> usr/bin` symlinks — dropping them (as the
    * first version did) breaks /bin,/lib and the container cannot start.
+   *
+   * @param stripTopDir proot-distro 根文件系统 tar 顶层是单目录（ubuntu-noble-aarch64/），
+   *                    剥离后内容直接落在 dest（否则 bin/bash 在子目录，proot 起不来）。
    */
-  private fun extractTarAsset(asset: String, dest: File, comp: String) {
+  private fun extractTarAsset(asset: String, dest: File, comp: String, stripTopDir: Boolean = false) {
     if (!hasAsset(asset)) return
     dest.mkdirs()
     val destCanon = dest.canonicalPath
+    // 预扫：若启用了 stripTopDir，探测第一个顶层目录名（tar 条目第一段）。
+    var topPrefix: String? = null
+    if (stripTopDir) {
+      context.assets.open(asset).use { input ->
+        val s: InputStream =
+          if (comp == "gz") org.apache.commons.compress.compressors.gzip.GzipCompressorInputStream(input)
+          else XZCompressorInputStream(input)
+        val t = TarArchiveInputStream(s)
+        var e = t.nextEntry
+        while (e != null && topPrefix == null) {
+          val first = e.name.replace('\\', '/').trimStart('/').substringBefore('/')
+          if (first.isNotEmpty()) topPrefix = first
+          e = t.nextEntry
+        }
+        t.close()
+      }
+    }
     context.assets.open(asset).use { input ->
       val stream: InputStream =
         if (comp == "gz") org.apache.commons.compress.compressors.gzip.GzipCompressorInputStream(input)
@@ -237,7 +269,7 @@ class EngineManager(private val context: Context, private val pickToken: String?
       val tar = TarArchiveInputStream(stream)
       var entry: TarArchiveEntry? = tar.nextEntry
       while (entry != null) {
-        val target = resolveAssetEntry(dest, destCanon, entry)
+        val target = resolveAssetEntry(dest, destCanon, entry, topPrefix)
         if (target != null) {
           when {
             entry.isDirectory -> target.mkdirs()
@@ -272,9 +304,11 @@ class EngineManager(private val context: Context, private val pickToken: String?
     Log.i(TAG, "tool asset: $asset -> " + dest.absolutePath)
   }
 
-  /** Resolve a tar entry inside dest, rejecting absolute paths and ../ traversal. */
-  private fun resolveAssetEntry(dest: File, destCanon: String, entry: TarArchiveEntry): File? {
-    val name = entry.name.replace('\\', '/').trimStart('/')
+  /** Resolve a tar entry inside dest, rejecting absolute paths and ../ traversal.
+   *  @param topPrefix 非空时剥离该顶层前缀（proot-distro 单目录 rootfs）。 */
+  private fun resolveAssetEntry(dest: File, destCanon: String, entry: TarArchiveEntry, topPrefix: String? = null): File? {
+    var name = entry.name.replace('\\', '/').trimStart('/')
+    if (topPrefix != null && name.startsWith(topPrefix + "/")) name = name.substring(topPrefix.length + 1)
     if (name.isEmpty() || name.contains("..")) return null
     val target = File(dest, name)
     return try {
@@ -1082,6 +1116,9 @@ class EngineManager(private val context: Context, private val pickToken: String?
 
   companion object {
     private const val TAG = "dsh-engine"
+
+    /** 工具资产解压并发锁（MainActivity/EngineService 双实例可能并发 startEngine）。 */
+    private val TOOL_EXTRACT_LOCK = Any()
 
     /** Healthy ticks (each 5s watchdog poll) required before the update-v2 finalize deletes usr-old. */
     const val UPDATE_CONFIRM_TICKS = 3
