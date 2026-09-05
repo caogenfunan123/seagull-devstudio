@@ -95,7 +95,10 @@ async function runSu(args, opts = {}) {
     return { ok: false, denied: true, danger, error: `高危命令已拦截（${danger}）：如确需执行请设置 force=true` };
   }
   try {
-    const { stdout, stderr } = await execFileAsync(ROOT_SU, args, {
+    // opts.uid 用于以指定 uid 运行（如 shell uid 2000 跑 uiautomator dump：root uid 0 会被
+    // SELinux/accessibility 服务拒绝）。语法 su <uid> -c <cmd>。
+    const suArgs = opts.uid != null ? [String(opts.uid), ...args] : args;
+    const { stdout, stderr } = await execFileAsync(ROOT_SU, suArgs, {
       env: cleanEnv(), timeout: opts.timeout || 30000, maxBuffer: 16 * 1024 * 1024,
     });
     if (!opts.silent) audit(action, command, 'ok', danger || undefined);
@@ -237,8 +240,10 @@ function tools(keepalive) {
       switch (action) {
         case 'dump_ui': {
           const p = '/data/local/tmp/window_dump.xml';
-          await runSu(['-c', `/system/bin/uiautomator dump ${p} 2>/dev/null`]);
-          return runSu(['-c', `/system/bin/cat ${p} 2>/dev/null || cat /sdcard/window_dump.xml`]);
+          // uiautomator 需 shell uid(2000) 才能连 UiAutomation 服务；root uid(0) 会被拒绝，
+          // 导致 dump 静默失败、window_dump.xml 不落地 → 观察半环断链。生成后 root 直接 cat。
+          await runSu(['-c', `/system/bin/uiautomator dump ${p} 2>&1`], { uid: 2000, action: 'ui-dump' });
+          return runSu(['-c', `/system/bin/cat ${p} 2>/dev/null || cat /sdcard/window_dump.xml 2>/dev/null`], { action: 'ui-dump-read' });
         }
         case 'tap':
           return runSu(['-c', `/system/bin/input tap ${x} ${y}`]);

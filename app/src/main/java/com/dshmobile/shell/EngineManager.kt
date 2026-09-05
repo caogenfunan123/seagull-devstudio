@@ -359,12 +359,18 @@ class EngineManager(private val context: Context, private val pickToken: String?
     // 缺桌面字段，容器内 nproc/ps/CMake -j 会读 0 核或解析失败。必须先落伪造文件，
     // 再在 proot 命令行里 bind 到 /proc/{stat,loadavg,uptime,version}。
     writeFakeSysdata(entry.parentFile)
+    val prootBin = File(usrDir, "bin/proot").absolutePath
     val script =
       "#!/bin/bash\n" +
         "# Seagull DevStudio Ubuntu container entry (rootfs top-level)\n" +
         "set -eu\n" +
         "ROOTFS_DIR=\"$(cd \"$(dirname \"${'$'}{BASH_SOURCE[0]}\")\" && pwd)\"\n" +
-        "PROOT_BIN=\"${'$'}{PROOT_BIN:-${'$'}(command -v proot || echo ${'$'}PREFIX/bin/proot)}\"\n" +
+        "# proot 默认用编译期 Termux tmp（/data/data/com.termux/...）建 glue rootfs，app 域不存在\n" +
+        "# 该路径 → glue rootfs 建不出、execve 失败。必须显式指向可写目录（TMPDIR 由引擎注入）。\n" +
+        "export PROOT_TMP_DIR=\"${'$'}{TMPDIR:-${'$'}HOME/tmp}\"\n" +
+        "mkdir -p \"${'$'}PROOT_TMP_DIR\"\n" +
+        "# proot 绝对路径由壳侧写入，不依赖 ${'$'}PREFIX/command -v（引擎 env 无 PREFIX 变量）。\n" +
+        "PROOT_BIN=\"${'$'}{PROOT_BIN:-" + prootBin + "}\"\n" +
         "exec \"${'$'}PROOT_BIN\" --link2symlink --kill-on-exit -0 -r \"${'$'}ROOTFS_DIR\" " +
         "-b /dev -b /proc -b /sys -b /storage " +
         "-b \"${'$'}ROOTFS_DIR/proc/.stat:/proc/stat\" " +

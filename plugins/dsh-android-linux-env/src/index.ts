@@ -126,8 +126,10 @@ function tools(svc: { status(): { tier: string } } | undefined) {
         additionalProperties: false,
         properties: {
           exportedAt: { type: 'string', required: true },
+          version: { type: 'string', required: true },
           env: { type: 'object', additionalProperties: true },
           dpkgPackages: { type: 'array', items: { type: 'string' } },
+          profilePatch: { type: 'string' },
           sharedDirs: { type: 'array', items: { type: 'string' } },
           sensitiveExcluded: { type: 'array', items: { type: 'string' } },
         },

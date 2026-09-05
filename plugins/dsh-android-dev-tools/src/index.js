@@ -59,13 +59,17 @@ function tools() {
       const { stat } = await import('node:fs/promises');
       const entry = ubuntuEntry();
       const rootfs = entry.replace('/proot-entry.sh', '');
+      // marker = Ubuntu 关键二进制 usr/bin/bash（Ubuntu 24.04 的 bin -> usr/bin 软链），
+      // 与壳侧 extractToolAssets 幂等落点（bin/bash）对齐。仅 access 根目录会漏判
+      // 「目录在但内容未解压」以及软链丢失的残缺装配。
+      const bash = `${rootfs}/usr/bin/bash`;
       try {
-        await access(rootfs);
+        await access(bash);
       } catch {
-        return { ok: false, present: false, rootfs, message: 'Ubuntu rootfs 未装配，请先运行 ToolPkg/rootfs 安装。' };
+        return { ok: false, present: false, rootfs, message: 'Ubuntu rootfs 未装配（缺 usr/bin/bash）：请确认 APK 内置 rootfs 资产已完整解压到 .dsh/ubuntu-rootfs。' };
       }
-      const st = await stat(rootfs);
-      return { ok: true, present: true, rootfs, sizeBytes: st.size };
+      const st = await stat(bash);
+      return { ok: true, present: true, rootfs, bashBytes: st.size };
     },
   });
 

@@ -437,6 +437,7 @@ function tools(svc: AndroidPrivilegeService, shellFace?: { resolve?(spec: Record
         properties: {
           tier: { type: 'string', required: true },
           fullAccess: { type: 'boolean', required: true },
+          rootChannel: { type: 'boolean' },
           wirelessDebugOn: { type: 'boolean' },
           allowSwitchOn: { type: 'boolean' },
           paired: { type: 'boolean' },
