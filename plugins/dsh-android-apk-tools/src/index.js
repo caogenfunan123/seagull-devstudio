@@ -203,13 +203,9 @@ function tools() {
       'Runs on the host Termux environment (java-based); requires java + apktool/jadx ' +
       '(install-java-tools.sh or built-in jar assets).',
     parameters: {
-      type: 'object',
-      properties: {
-        apkPath: { type: 'string', description: 'Path to the target APK.' },
-        outDir: { type: 'string', description: 'Output directory.' },
-        mode: { type: 'string', enum: ['apktool', 'jadx', 'both'], description: 'Decompile engine.' },
-      },
-      required: ['apkPath', 'outDir'],
+      apkPath: { type: 'string', required: true, description: 'Path to the target APK.' },
+      outDir: { type: 'string', required: true, description: 'Output directory.' },
+      mode: { type: 'string', enum: ['apktool', 'jadx', 'both'], description: 'Decompile engine.' },
     },
     output: { schema: { type: 'object', additionalProperties: true }, render: renderText },
     async execute({ apkPath, outDir, mode = 'apktool' }) {
@@ -229,16 +225,12 @@ function tools() {
       'Rebuild an APK project directory (apktool b), then zipalign and debug-sign it (apksigner). ' +
       'Requires java + apktool + apksigner (install-java-tools.sh or built-in assets).',
     parameters: {
-      type: 'object',
-      properties: {
-        srcDir: { type: 'string', description: 'The APK project directory (from apk_decompile apktool).' },
-        outApk: { type: 'string', description: 'Output signed APK path.' },
-        keystore: { type: 'string', description: 'Custom keystore path (default: auto-generated debug keystore).' },
-        ksAlias: { type: 'string', description: 'Key alias (default androiddebugkey).' },
-        ksPass: { type: 'string', description: 'Keystore password (default android).' },
-        keyPass: { type: 'string', description: 'Key password (default android).' },
-      },
-      required: ['srcDir', 'outApk'],
+      srcDir: { type: 'string', required: true, description: 'The APK project directory (from apk_decompile apktool).' },
+      outApk: { type: 'string', required: true, description: 'Output signed APK path.' },
+      keystore: { type: 'string', description: 'Custom keystore path (default: auto-generated debug keystore).' },
+      ksAlias: { type: 'string', description: 'Key alias (default androiddebugkey).' },
+      ksPass: { type: 'string', description: 'Keystore password (default android).' },
+      keyPass: { type: 'string', description: 'Key password (default android).' },
     },
     output: { schema: { type: 'object', additionalProperties: true }, render: renderText },
     async execute({ srcDir, outApk, keystore, ksAlias = 'androiddebugkey', ksPass = 'android', keyPass = 'android' }) {
@@ -278,11 +270,7 @@ function tools() {
       'Inspect an APK metadata: package name, version, min/target SDK, permissions, native ABIs, ' +
       'and signing certificate. Uses aapt2 dump badging + apksigner verify --print-certs (host Termux).',
     parameters: {
-      type: 'object',
-      properties: {
-        apkPath: { type: 'string', description: 'Path to the target APK.' },
-      },
-      required: ['apkPath'],
+      apkPath: { type: 'string', required: true, description: 'Path to the target APK.' },
     },
     output: { schema: { type: 'object', additionalProperties: true }, render: renderText },
     async execute({ apkPath }) {
@@ -323,14 +311,11 @@ function tools() {
       'Generate a signing keystore (keytool). Defaults to a standard Android debug keystore; ' +
       'customize alias/storePass/keyPass/cn/outPath for release signing.',
     parameters: {
-      type: 'object',
-      properties: {
-        alias: { type: 'string', description: 'Key alias (default androiddebugkey).' },
-        storePass: { type: 'string', description: 'Keystore password (default android).' },
-        keyPass: { type: 'string', description: 'Key password (default android).' },
-        cn: { type: 'string', description: 'Distinguished name CN (default CN=Android Debug,O=Android,C=US).' },
-        outPath: { type: 'string', description: 'Output keystore path (default usr/.dsh/keystore/debug.keystore).' },
-      },
+      alias: { type: 'string', description: 'Key alias (default androiddebugkey).' },
+      storePass: { type: 'string', description: 'Keystore password (default android).' },
+      keyPass: { type: 'string', description: 'Key password (default android).' },
+      cn: { type: 'string', description: 'Distinguished name CN (default CN=Android Debug,O=Android,C=US).' },
+      outPath: { type: 'string', description: 'Output keystore path (default usr/.dsh/keystore/debug.keystore).' },
     },
     output: { schema: { type: 'object', additionalProperties: true }, render: renderText },
     async execute(params = {}) {
@@ -345,13 +330,9 @@ function tools() {
       'decompile → rebuild → sign → install loop. Requires /system/bin/su (KernelSU/Magisk). ' +
       'apkPath must be an absolute device-visible path.',
     parameters: {
-      type: 'object',
-      properties: {
-        apkPath: { type: 'string', description: 'Absolute path to the signed APK.' },
-        flags: { type: 'string', description: 'Extra pm install flags (default "-r -t"; e.g. "-r -d" to downgrade).' },
-        user: { type: 'string', description: 'Target user id (default none; e.g. "0").' },
-      },
-      required: ['apkPath'],
+      apkPath: { type: 'string', required: true, description: 'Absolute path to the signed APK.' },
+      flags: { type: 'string', description: 'Extra pm install flags (default "-r -t"; e.g. "-r -d" to downgrade).' },
+      user: { type: 'string', description: 'Target user id (default none; e.g. "0").' },
     },
     output: { schema: { type: 'object', additionalProperties: true }, render: renderText },
     async execute({ apkPath, flags = '-r -t', user }) {
@@ -381,13 +362,9 @@ function tools() {
       'Search decompiled smali source (apktool output) for a string or ERE regex, returning ' +
       'file:line matches. Use it to locate code to patch before smali_edit.',
     parameters: {
-      type: 'object',
-      properties: {
-        dir: { type: 'string', description: 'Root dir of smali source (e.g. apktool output).' },
-        pattern: { type: 'string', description: 'String or ERE regex to search (grep -E).' },
-        maxResults: { type: 'number', description: 'Max matches to return (default 50).' },
-      },
-      required: ['dir', 'pattern'],
+      dir: { type: 'string', required: true, description: 'Root dir of smali source (e.g. apktool output).' },
+      pattern: { type: 'string', required: true, description: 'String or ERE regex to search (grep -E).' },
+      maxResults: { type: 'number', description: 'Max matches to return (default 50).' },
     },
     output: { schema: { type: 'object', additionalProperties: true }, render: renderText },
     async execute({ dir, pattern, maxResults = 50 }) {
@@ -417,14 +394,10 @@ function tools() {
       'Edit a smali file by replacing a literal string (find) with another (replace). Literal ' +
       '(no regex); writes back in place and keeps a .bak backup. Use smali_find first to locate.',
     parameters: {
-      type: 'object',
-      properties: {
-        file: { type: 'string', description: 'Path to the smali file to edit.' },
-        find: { type: 'string', description: 'Literal text to replace.' },
-        replace: { type: 'string', description: 'Replacement text.' },
-        all: { type: 'boolean', description: 'Replace all occurrences (default false; find must be unique).' },
-      },
-      required: ['file', 'find', 'replace'],
+      file: { type: 'string', required: true, description: 'Path to the smali file to edit.' },
+      find: { type: 'string', required: true, description: 'Literal text to replace.' },
+      replace: { type: 'string', required: true, description: 'Replacement text.' },
+      all: { type: 'boolean', description: 'Replace all occurrences (default false; find must be unique).' },
     },
     output: { schema: { type: 'object', additionalProperties: true }, render: renderText },
     async execute({ file, find, replace, all = false }) {

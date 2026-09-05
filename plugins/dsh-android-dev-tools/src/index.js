@@ -29,12 +29,8 @@ function tools() {
       '(apt/dpkg/gcc/cmake/python3/java toolchain). Typically used for APK reverse/build, ' +
       'C/C++ compilation, or Python tooling that needs a full distro.',
     parameters: {
-      type: 'object',
-      properties: {
-        command: { type: 'string', description: 'Shell command to run inside Ubuntu (bash -lc).' },
-        timeoutMs: { type: 'number', description: 'Timeout in ms (default 120000).' },
-      },
-      required: ['command'],
+      command: { type: 'string', required: true, description: 'Shell command to run inside Ubuntu (bash -lc).' },
+      timeoutMs: { type: 'number', description: 'Timeout in ms (default 120000).' },
     },
     output: { schema: { type: 'object', additionalProperties: true }, render: renderText },
     async execute({ command, timeoutMs = 120000 }) {
@@ -56,7 +52,7 @@ function tools() {
   const statusTool = defineTool({
     name: 'ubuntu_status',
     description: 'Report whether the Ubuntu rootfs is present and its size.',
-    parameters: { type: 'object', properties: {}, required: [] },
+    parameters: {},
     output: { schema: { type: 'object', additionalProperties: true }, render: renderText },
     async execute() {
       const { access } = await import('node:fs');

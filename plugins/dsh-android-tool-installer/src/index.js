@@ -206,12 +206,8 @@ function tools(service) {
     name: 'tool_install',
     description: 'Install a development tool from the three-tier registry (apktool, jadx, radare2, rizin).',
     parameters: {
-      type: 'object',
-      properties: {
-        name: { type: 'string', description: 'Tool name to install.' },
-        force: { type: 'boolean', description: 'Reinstall over the existing tool (delete then re-download).' },
-      },
-      required: ['name'],
+      name: { type: 'string', required: true, description: 'Tool name to install.' },
+      force: { type: 'boolean', description: 'Reinstall over the existing tool (delete then re-download).' },
     },
     output: { schema: { type: 'object', additionalProperties: true }, render: renderText },
     async execute({ name, force = false }) { return service.install(name, { force }); },
@@ -223,9 +219,7 @@ function tools(service) {
       'Upgrade an installed tool to the registry target version by force-reinstalling it ' +
       '(delete existing install, re-download, re-verify sha256, re-extract).',
     parameters: {
-      type: 'object',
-      properties: { name: { type: 'string', description: 'Tool name to upgrade.' } },
-      required: ['name'],
+      name: { type: 'string', required: true, description: 'Tool name to upgrade.' },
     },
     output: { schema: { type: 'object', additionalProperties: true }, render: renderText },
     async execute({ name }) { return service.install(name, { force: true }); },
@@ -234,7 +228,7 @@ function tools(service) {
   const listTool = defineTool({
     name: 'tool_list',
     description: 'List all available tools with install status.',
-    parameters: { type: 'object', properties: {}, required: [] },
+    parameters: {},
     output: { schema: { type: 'object', additionalProperties: true }, render: renderText },
     async execute() { return { ok: true, tools: service.list() }; },
   });
@@ -244,7 +238,7 @@ function tools(service) {
     description:
       'Report the current or last tool install task progress (phase, bytes, percent, error). ' +
       'Poll this to track a long tool_install download/extract instead of blocking.',
-    parameters: { type: 'object', properties: {}, required: [] },
+    parameters: {},
     output: { schema: { type: 'object', additionalProperties: true }, render: renderText },
     async execute() { return { ok: true, ...service.status() }; },
   });

@@ -209,12 +209,8 @@ function tools(keepalive) {
       'Execute a shell command with full root (uid=0) privileges in a clean Android environment. ' +
       'Use for system-wide read/write, app data access, /proc inspection, or privileged patching.',
     parameters: {
-      type: 'object',
-      properties: {
-        command: { type: 'string', description: 'The shell command to run as root.' },
-        force: { type: 'boolean', description: 'Bypass the dangerous-command guard (rm -rf /, mkfs, dd, shred) — default false.' },
-      },
-      required: ['command'],
+      command: { type: 'string', required: true, description: 'The shell command to run as root.' },
+      force: { type: 'boolean', description: 'Bypass the dangerous-command guard (rm -rf /, mkfs, dd, shred) — default false.' },
     },
     output: { schema: { type: 'object', additionalProperties: true }, render: renderText },
     async execute({ command, force = false }) {
@@ -228,21 +224,13 @@ function tools(keepalive) {
     description:
       'Control the Android device UI via root: dump the view hierarchy, tap, swipe, or send text/key events.',
     parameters: {
-      type: 'object',
-      properties: {
-        action: {
-          type: 'string',
-          enum: ['dump_ui', 'tap', 'swipe', 'input_text', 'keyevent'],
-          description: 'UI action to perform.',
-        },
-        x: { type: 'number', description: 'X coordinate for tap / swipe start.' },
-        y: { type: 'number', description: 'Y coordinate for tap / swipe start.' },
-        x2: { type: 'number', description: 'Target X for swipe.' },
-        y2: { type: 'number', description: 'Target Y for swipe.' },
-        text: { type: 'string', description: 'Text to input (input_text).' },
-        keyCode: { type: 'number', description: 'Keyevent code (e.g. 3=HOME, 4=BACK, 66=ENTER).' },
-      },
-      required: ['action'],
+      action: { type: 'string', required: true, enum: ['dump_ui', 'tap', 'swipe', 'input_text', 'keyevent'], description: 'UI action to perform.' },
+      x: { type: 'number', description: 'X coordinate for tap / swipe start.' },
+      y: { type: 'number', description: 'Y coordinate for tap / swipe start.' },
+      x2: { type: 'number', description: 'Target X for swipe.' },
+      y2: { type: 'number', description: 'Target Y for swipe.' },
+      text: { type: 'string', description: 'Text to input (input_text).' },
+      keyCode: { type: 'number', description: 'Keyevent code (e.g. 3=HOME, 4=BACK, 66=ENTER).' },
     },
     output: { schema: { type: 'object', additionalProperties: true }, render: renderText },
     async execute({ action, x, y, x2, y2, text, keyCode }) {
@@ -308,8 +296,7 @@ function tools(keepalive) {
     description:
       'List a directory (or file) with root privileges. Access any path regardless of app sandbox.',
     parameters: {
-      type: 'object',
-      properties: { path: { type: 'string', description: 'Directory or file path (default /).' } },
+      path: { type: 'string', description: 'Directory or file path (default /).' },
     },
     output: { schema: { type: 'object', additionalProperties: true }, render: renderText },
     async execute({ path = '/' }) {
@@ -322,12 +309,8 @@ function tools(keepalive) {
     description:
       'Read a text file with root privileges (any path). Truncates to maxBytes to avoid huge output.',
     parameters: {
-      type: 'object',
-      properties: {
-        path: { type: 'string', description: 'File path to read.' },
-        maxBytes: { type: 'number', description: 'Max bytes to read (default 65536).' },
-      },
-      required: ['path'],
+      path: { type: 'string', required: true, description: 'File path to read.' },
+      maxBytes: { type: 'number', description: 'Max bytes to read (default 65536).' },
     },
     output: { schema: { type: 'object', additionalProperties: true }, render: renderText },
     async execute({ path, maxBytes = 65536 }) {
@@ -341,12 +324,8 @@ function tools(keepalive) {
     description:
       'Write a text file with root privileges (any path). Content is base64-transferred; cap 8192 bytes.',
     parameters: {
-      type: 'object',
-      properties: {
-        path: { type: 'string', description: 'Target file path (absolute).' },
-        content: { type: 'string', description: 'Text content to write.' },
-      },
-      required: ['path', 'content'],
+      path: { type: 'string', required: true, description: 'Target file path (absolute).' },
+      content: { type: 'string', required: true, description: 'Text content to write.' },
     },
     output: { schema: { type: 'object', additionalProperties: true }, render: renderText },
     async execute({ path, content }) {
@@ -365,12 +344,8 @@ function tools(keepalive) {
     description:
       'Copy a device file (any path, incl. binary) to a readable location (default /data/local/tmp), returning its path.',
     parameters: {
-      type: 'object',
-      properties: {
-        path: { type: 'string', description: 'Source file path on device.' },
-        dest: { type: 'string', description: 'Destination path (default /data/local/tmp/root_pull_out).' },
-      },
-      required: ['path'],
+      path: { type: 'string', required: true, description: 'Source file path on device.' },
+      dest: { type: 'string', description: 'Destination path (default /data/local/tmp/root_pull_out).' },
     },
     output: { schema: { type: 'object', additionalProperties: true }, render: renderText },
     async execute({ path, dest = '/data/local/tmp/root_pull_out' }) {
@@ -386,12 +361,8 @@ function tools(keepalive) {
       'Copy a device file (any path, incl. binary) into the host home (.dsh/fetched/) so the model ' +
       'and the Ubuntu container can read it. Host home is bind-mounted into the container.',
     parameters: {
-      type: 'object',
-      properties: {
-        path: { type: 'string', description: 'Source file path on device.' },
-        dest: { type: 'string', description: 'Host destination path (default home/.dsh/fetched/<basename>).' },
-      },
-      required: ['path'],
+      path: { type: 'string', required: true, description: 'Source file path on device.' },
+      dest: { type: 'string', description: 'Host destination path (default home/.dsh/fetched/<basename>).' },
     },
     output: { schema: { type: 'object', additionalProperties: true }, render: renderText },
     async execute({ path, dest }) {
@@ -410,12 +381,8 @@ function tools(keepalive) {
       'Copy a host file (incl. binary) to any device path with root privileges. Host home files ' +
       'are visible to the container (bind mount) and to root.',
     parameters: {
-      type: 'object',
-      properties: {
-        src: { type: 'string', description: 'Host source file path (absolute).' },
-        dest: { type: 'string', description: 'Device destination path (absolute).' },
-      },
-      required: ['src', 'dest'],
+      src: { type: 'string', required: true, description: 'Host source file path (absolute).' },
+      dest: { type: 'string', required: true, description: 'Device destination path (absolute).' },
     },
     output: { schema: { type: 'object', additionalProperties: true }, render: renderText },
     async execute({ src, dest }) {
