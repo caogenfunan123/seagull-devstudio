@@ -33,7 +33,7 @@ cd ..\plugins\dsh-android-<pkg> && npm run build
 
 **门禁（build-apk-013.ps1 内）**：marketplace 修复校验（patch-marketplace.mjs）→ undo 移动端裁剪校验（patch-undo-mobile.mjs）→ 快照注入（inject-snapshot.py/inject-external-plugins.py）→ 权威 patch 覆盖（update-snapshot-patch.py）→ 挂载集⊇注入集（check-patch-mounts.mjs）→ 机密（check-snapshot-secrets.mjs，跨平台替代 .ps1）→ **第三方合规（check-third-party.mjs，GPL 义务）** → elf-check（校验快照 node ELF 架构，防坑 18）→ 许可资产拷贝（LICENSES → assets/licenses）→ gradle。
 
-**云端构建（0.13.0 起，宿主=本仓库，自包含）**：`.github/workflows/build-apk.yml`（`workflow_dispatch` 手动，matrix arm64/x86_64）托管整套构建链并只操作本仓库——快照从源重建（`base/` 底座归档为输入，Git LFS）、6 个缺 lib/ 的插件 npm 构建、注入/门禁/gradle 全部云端完成，仅 `upload-artifact` 供本地下载 debug，不出 Release；**不依赖协调库**（私库，GITHUB_TOKEN 无法签出）。`build-apk.mjs` 以 `DSH_APK_DIR=$GITHUB_WORKSPACE` 指向本仓库（gradle 在此）。本地仍在协调库根跑 `pwsh scripts\build-apk-013.ps1`（`scripts/` 前缀）。
+**云端构建（0.13.0 起，宿主=本仓库，自包含）**：`.github/workflows/build-apk.yml`（`workflow_dispatch` 手动，matrix arm64/x86_64）托管整套构建链并只操作本仓库——快照从源重建（`base/` 底座归档为输入，Git LFS）、6 个缺 lib/ 的插件 npm 构建、注入/门禁/gradle 全部云端完成，APK 上传 GitHub Release（`softprops/action-gh-release`，绕过 artifact 存储配额）；**不依赖协调库**（私库，GITHUB_TOKEN 无法签出）。`build-apk.mjs` 以 `DSH_APK_DIR=$GITHUB_WORKSPACE` 指向本仓库（gradle 在此）。本地仍在协调库根跑 `pwsh scripts\build-apk-013.ps1`（`scripts/` 前缀）。
 
 **设备验证链路**（真机 arm64 vivo V2425A `10AF2B0GN0001F2`；模拟器 MuMu x86_64 `127.0.0.1:16416/7555`）：
 - 安装：`adb -s <serial> install -r -t out\v<版本>\...apk`（同签名 debug.keystore；**指纹变更触发 refreshSnapshot 全量重解压 ≈2-4 分钟，勿在解压中杀进程**）。
@@ -232,3 +232,4 @@ cd ..\plugins\dsh-android-<pkg> && npm run build
 | 2026-09-02 | 0.13.2-seagull | **地基修复批（复盘对齐清单）**：① proot 进快照 TARGETS（97KB，Ubuntu 容器启动命根——此前快照无 proot 容器根本起不来）；② install-java-tools.sh 按需安装器（openjdk-21+apktool+jadx+apksigner+aapt2，仿 install-clang 解包模式绕 dpkg EACCES）；③ apk-tools 重写为宿主双路径执行（usr/bin wrapper 优先 / usr/share 内置 jar 回退，java -jar 显式路径，**不经容器**）；④ extractToolAssets 幂等检查补 rootfs bin/bash 落点；⑤ 全部插件/Kotlin/脚本语法与 check-patch-mounts 门禁通过 | AI 开发助手 |
 
 | 2026-09-02 | 0.13.2-seagull | **root 保活功能（root-ops）**：周期巡检 su 可用性（su -c id 回 uid=0，60s 心跳，失败自动恢复重试）；KernelSU allowlist/denylist 校验（包名不在授权名单则提示，避免 root 调用被弹窗拦截）；新增 root_status 工具（root 就绪/allowlist/失败历史）+ rootKeepalive 服务面 | AI 开发助手 |
+| 2026-09-05 | 0.13.2-seagull | **CI 产物上传改 GitHub Release（绕过 artifact 配额）**：GitHub Actions artifact 存储配额账户级且 6-12 小时延迟重算，删光 artifact 仍报 `Artifact storage quota has been hit` 无法上传 360MB APK；build-apk.yml 上传步骤由 `upload-artifact` 改为 `softprops/action-gh-release@v2`（`tag_name: apk-<run_id>` 每次构建独立 release）+ 顶层 `permissions: contents: write`；§2 云端构建描述同步 | AI 开发助手 |

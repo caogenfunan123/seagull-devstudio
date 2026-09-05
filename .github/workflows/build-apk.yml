@@ -7,7 +7,7 @@
 # 流程：检出自仓库(node/python/java) -> npm 构建 6 个缺 lib/ 的插件 -> stage 底座 base/
 #       -> node scripts/build-snapshot-013.mjs <abi>（Termux 源装配 + 注入 + 门禁 + 归档）
 #       -> node scripts/build-apk.mjs <abi>（注入插件 + 门禁 + gradle + 产物）
-#       -> upload-artifact（不出 Release）。
+#       -> 上传 APK 到 GitHub Release（softprops/action-gh-release，绕过 artifact 配额）。
 # 注：build-snapshot（Termux 包下载 + 归档压缩）+ 插件 npm 构建较重，需一次 dry-run 迭代验证。
 
 name: build-apk
@@ -26,6 +26,9 @@ on:
         description: 'APK 版本后缀（默认空=正式版纯净版本号；测试构建显式传 -fix 等）'
         type: string
         default: ''
+
+permissions:
+  contents: write
 
 jobs:
   build:
@@ -138,10 +141,12 @@ jobs:
           set -e
           node scripts/build-apk.mjs --abi "${{ matrix.abi }}" --suffix "${{ github.event.inputs.suffix }}"
 
-      - name: 上传 APK 产物（本地下载 debug；不出 Release）
-        uses: actions/upload-artifact@v4
+      - name: 上传 APK 到 Release（绕过 artifact 配额）
+        uses: softprops/action-gh-release@v2
         with:
-          name: dsh-mobile-apk-${{ matrix.abi }}${{ github.event.inputs.suffix }}
-          path: out/v0.13.0/*.apk
-          if-no-files-found: error
-          retention-days: 30
+          tag_name: apk-${{ github.run_id }}
+          name: Seagull DevStudio APK arm64 (build ${{ github.run_id }})
+          body: |
+            自动构建产物（Seagull DevStudio fork，arm64）。
+            提交：${{ github.sha }}
+          files: out/v0.13.0/*.apk
