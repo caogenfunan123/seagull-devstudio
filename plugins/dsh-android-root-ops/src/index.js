@@ -242,7 +242,11 @@ function tools(keepalive) {
           const p = '/data/local/tmp/window_dump.xml';
           // uiautomator 需 shell uid(2000) 才能连 UiAutomation 服务；root uid(0) 会被拒绝，
           // 导致 dump 静默失败、window_dump.xml 不落地 → 观察半环断链。生成后 root 直接 cat。
-          await runSu(['-c', `/system/bin/uiautomator dump ${p} 2>&1`], { uid: 2000, action: 'ui-dump' });
+          // 关键：必须检查 dump 返回值——dump 失败就返回 stderr，而不是静默 cat 一个不存在的文件。
+          const dumped = await runSu(['-c', `/system/bin/uiautomator dump ${p} 2>&1`], { uid: 2000, action: 'ui-dump' });
+          if (!dumped.ok) {
+            return { ok: false, error: 'uiautomator dump 失败：' + (dumped.error || dumped.stderr || '无输出') };
+          }
           return runSu(['-c', `/system/bin/cat ${p} 2>/dev/null || cat /sdcard/window_dump.xml 2>/dev/null`], { action: 'ui-dump-read' });
         }
         case 'tap':
