@@ -1662,9 +1662,9 @@ class MainActivity : ComponentActivity() {
           // 引擎进程已死：宣判失败（自动回退路径），不再空等。
           break
         }
-        val elapsedSec = (pollBudgetMs - (budgetEnd - System.currentTimeMillis())) / pollStepMs
+        val elapsedSec = ((pollBudgetMs - (budgetEnd - System.currentTimeMillis())) / pollStepMs).toInt()
         if (elapsedSec % 15 == 0 && elapsedSec > waitedSeconds) {
-          waitedSeconds = elapsedSec.toInt()
+          waitedSeconds = elapsedSec
           val s = waitedSeconds
           runOnUiThread {
             if (!isCurrentEngineFlow(generation)) return@runOnUiThread
