@@ -95,8 +95,9 @@ async function runSu(args, opts = {}) {
     return { ok: false, denied: true, danger, error: `高危命令已拦截（${danger}）：如确需执行请设置 force=true` };
   }
   try {
-    // opts.uid 用于以指定 uid 运行（如 shell uid 2000 跑 uiautomator dump：root uid 0 会被
-    // SELinux/accessibility 服务拒绝）。语法 su <uid> -c <cmd>。
+    // opts.uid 以指定 uid 运行（语法 su <uid> -c <cmd>）。注意：数字降权只改 uid/gid，SELinux
+    // 域仍是 ksu（非 shell），KernelSU su 无 --context 旗标——不能用于需要 shell 域的进程
+    // （如 uiautomator）。目前无调用方，保留作通用降权能力并留此警示。
     const suArgs = opts.uid != null ? [String(opts.uid), ...args] : args;
     const { stdout, stderr } = await execFileAsync(ROOT_SU, suArgs, {
       env: cleanEnv(), timeout: opts.timeout || 30000, maxBuffer: 16 * 1024 * 1024,
@@ -239,15 +240,20 @@ function tools(keepalive) {
     async execute({ action, x, y, x2, y2, text, keyCode }) {
       switch (action) {
         case 'dump_ui': {
-          const p = '/data/local/tmp/window_dump.xml';
-          // uiautomator 需 shell uid(2000) 才能连 UiAutomation 服务；root uid(0) 会被拒绝，
-          // 导致 dump 静默失败、window_dump.xml 不落地 → 观察半环断链。生成后 root 直接 cat。
-          // 关键：必须检查 dump 返回值——dump 失败就返回 stderr，而不是静默 cat 一个不存在的文件。
-          const dumped = await runSu(['-c', `/system/bin/uiautomator dump ${p} 2>&1`], { uid: 2000, action: 'ui-dump' });
-          if (!dumped.ok) {
-            return { ok: false, error: 'uiautomator dump 失败：' + (dumped.error || dumped.stderr || '无输出') };
+          // 观察半环（F1.6）：导出当前界面视图层级。
+          // 弃用 uiautomator 的原因（真机实测，KernelSU + Enforcing）：su 只降数字 uid（su 2000 -c），
+          // SELinux 域仍是 u:r:ksu:s0（非 shell），且 KernelSU su 无 --context 旗标、环境无 setcon——
+          // uiautomator 连 UiAutomation 服务被拒，表现为 exit 0 + 空输出 + window_dump.xml 不落地，
+          // 检查退出码拦不住（execFile 正常 resolve → runSu.ok=true）。dumpsys activity top 在
+          // root(ksu) 域直连可用，无 SELinux 障碍，View Hierarchy 段含 class/resource-id/bounds。
+          const r = await runSu(['-c', '/system/bin/dumpsys activity top 2>&1'], { action: 'ui-dump' });
+          if (r.ok && r.stdout) {
+            // 提取首个 View Hierarchy 段（ROM 差异无标记则回退整段），封顶防任务栈全量倾倒。
+            const idx = r.stdout.indexOf('View Hierarchy:');
+            const tree = (idx >= 0 ? r.stdout.slice(idx) : r.stdout).slice(0, 20000);
+            return { ok: true, source: 'dumpsys-activity-top', stdout: tree, stderr: r.stderr };
           }
-          return runSu(['-c', `/system/bin/cat ${p} 2>/dev/null || cat /sdcard/window_dump.xml 2>/dev/null`], { action: 'ui-dump-read' });
+          return { ok: false, error: 'dumpsys activity top 无输出：' + (r.error || r.stderr || '无输出') };
         }
         case 'tap':
           return runSu(['-c', `/system/bin/input tap ${x} ${y}`]);
