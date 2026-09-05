@@ -626,6 +626,14 @@ for deb in *.deb; do
 done
 rm -rf "$TMPX"
 [ "$found" = "1" ] || { echo "[install-java-tools] 错误：缓存中无目标包（apt 下载失败？）"; exit 1; }
+# 修复解包 wrapper 的 shebang：Termux deb 内嵌 /data/data/com.termux/files/usr 前缀，
+# 自定义前缀（com.dsharnessmobile.shell）下这些 #! 解释器路径不存在 → apktool/jadx/apksigner
+# 直接不可执行（termux-exec 只重写 ELF 解释器与路径，不重写脚本 shebang）。
+for f in "$B"/bin/*; do
+  [ -f "$f" ] || continue
+  head -c 2 "$f" 2>/dev/null | grep -q '^#!' || continue
+  sed -i "s#/data/data/com.termux/files/usr#$B#g" "$f"
+done
 # java/javac 入口：openjdk postinst 经 update-alternatives 建链，data 树常无 bin/java → 显式补。
 if ! [ -e "$B/bin/java" ]; then
   JRE_BIN="$(find "$B" -path '*/bin/java' -type f 2>/dev/null | head -1)"
