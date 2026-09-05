@@ -83,7 +83,18 @@ apt-get clean
 rm -rf /var/lib/apt/lists/*
 EOF
 sudo cp "$INIT" "$ROOTFS/tmp/init-rootfs.sh"
+# 挂载 /dev /dev/pts /proc /sys：openjdk postinst 与 apt 日志写需要 /dev/pts，
+# 不挂载会 posix_openpt (19: No such device) → dpkg postinst 失败，工具链安装中断。
+sudo mount --bind /dev "$ROOTFS/dev" 2>/dev/null || true
+sudo mkdir -p "$ROOTFS/dev/pts"
+sudo mount -t devpts devpts "$ROOTFS/dev/pts" 2>/dev/null || true
+sudo mount -t proc proc "$ROOTFS/proc" 2>/dev/null || true
+sudo mount -t sysfs sys "$ROOTFS/sys" 2>/dev/null || true
 sudo chroot "$ROOTFS" /bin/bash /tmp/init-rootfs.sh
+sudo umount "$ROOTFS/dev/pts" 2>/dev/null || true
+sudo umount "$ROOTFS/dev" 2>/dev/null || true
+sudo umount "$ROOTFS/proc" 2>/dev/null || true
+sudo umount "$ROOTFS/sys" 2>/dev/null || true
 sudo rm -f "$ROOTFS/tmp/init-rootfs.sh"
 
 echo "=== [5/5] 重打包（保持顶层结构）+ sha256 ==="
