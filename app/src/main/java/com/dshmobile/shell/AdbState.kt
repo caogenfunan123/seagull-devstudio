@@ -162,35 +162,43 @@ object AdbState {
           val pairPort = java.util.concurrent.atomic.AtomicInteger(0)
           val connPort = java.util.concurrent.atomic.AtomicInteger(0)
           val latch = java.util.concurrent.CountDownLatch(2)
-          val resolveBoth = { info: android.net.nsd.NsdServiceInfo ->
-            val type = info.serviceType ?: ""
-            mgr.resolveService(info, object : android.net.nsd.NsdManager.ResolveListener {
+          // 每类型独立 listener + AtomicBoolean 去重：mDNS 抖动会多次 onServiceFound/resolve，
+          // 共用单 listener 时 latch 计数会错位（早减到 0 提前返回）。去重后每类型至多 countDown 一次。
+          val pairSettled = java.util.concurrent.atomic.AtomicBoolean(false)
+          val connSettled = java.util.concurrent.atomic.AtomicBoolean(false)
+          var pairDl: android.net.nsd.NsdManager.DiscoveryListener? = null
+          var connDl: android.net.nsd.NsdManager.DiscoveryListener? = null
+          fun settlePair() { if (pairSettled.compareAndSet(false, true)) latch.countDown() }
+          fun settleConn() { if (connSettled.compareAndSet(false, true)) latch.countDown() }
+          fun discoverOne(serviceType: String, isPair: Boolean) {
+            val port = if (isPair) pairPort else connPort
+            val rl = object : android.net.nsd.NsdManager.ResolveListener {
               override fun onResolveFailed(serviceInfo: android.net.nsd.NsdServiceInfo, errorCode: Int) {
-                latch.countDown()
+                if (isPair) settlePair() else settleConn()
               }
               override fun onServiceResolved(rs: android.net.nsd.NsdServiceInfo) {
-                when {
-                  type.contains("_adb-tls-pairing._tcp") -> pairPort.set(rs.port)
-                  type.contains("_adb-tls-connect._tcp") -> connPort.set(rs.port)
-                }
-                latch.countDown()
+                port.set(rs.port)
+                if (isPair) settlePair() else settleConn()
               }
-            })
-          }
-          val listener = object : android.net.nsd.NsdManager.DiscoveryListener {
-            override fun onDiscoveryStarted(serviceType: String) {}
-            override fun onDiscoveryStopped(serviceType: String) {}
-            override fun onServiceLost(serviceInfo: android.net.nsd.NsdServiceInfo) {}
-            override fun onStartDiscoveryFailed(serviceType: String, errorCode: Int) {
-              latch.countDown(); latch.countDown()
             }
-            override fun onStopDiscoveryFailed(serviceType: String, errorCode: Int) {}
-            override fun onServiceFound(serviceInfo: android.net.nsd.NsdServiceInfo) = resolveBoth(serviceInfo)
+            val dl = object : android.net.nsd.NsdManager.DiscoveryListener {
+              override fun onDiscoveryStarted(serviceType: String) {}
+              override fun onDiscoveryStopped(serviceType: String) {}
+              override fun onServiceLost(serviceInfo: android.net.nsd.NsdServiceInfo) {}
+              override fun onStartDiscoveryFailed(serviceType: String, errorCode: Int) {
+                if (isPair) settlePair() else settleConn()
+              }
+              override fun onStopDiscoveryFailed(serviceType: String, errorCode: Int) {}
+              override fun onServiceFound(serviceInfo: android.net.nsd.NsdServiceInfo) = mgr.resolveService(serviceInfo, rl)
+            }
+            if (isPair) pairDl = dl else connDl = dl
+            try { mgr.discoverServices(serviceType, android.net.nsd.NsdManager.PROTOCOL_DNS_SD, dl) } catch (_: Throwable) { if (isPair) settlePair() else settleConn() }
           }
-          try { mgr.discoverServices("_adb-tls-pairing._tcp", android.net.nsd.NsdManager.PROTOCOL_DNS_SD, listener) } catch (_: Throwable) { latch.countDown() }
-          try { mgr.discoverServices("_adb-tls-connect._tcp", android.net.nsd.NsdManager.PROTOCOL_DNS_SD, listener) } catch (_: Throwable) { latch.countDown() }
+          discoverOne("_adb-tls-pairing._tcp", true)
+          discoverOne("_adb-tls-connect._tcp", false)
           try { latch.await(NSD_TIMEOUT_MS, java.util.concurrent.TimeUnit.MILLISECONDS) } catch (_: InterruptedException) {}
-          try { mgr.stopServiceDiscovery(listener) } catch (_: Throwable) {}
+          try { pairDl?.let { mgr.stopServiceDiscovery(it) } } catch (_: Throwable) {}
+          try { connDl?.let { mgr.stopServiceDiscovery(it) } } catch (_: Throwable) {}
           if (pairPort.get() > 0) out.put("pair", pairPort.get())
           if (connPort.get() > 0) out.put("connect", connPort.get())
           val arr = JSONArray()

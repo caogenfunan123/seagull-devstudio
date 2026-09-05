@@ -39,8 +39,11 @@ function tools() {
     output: { schema: { type: 'object', additionalProperties: true }, render: renderText },
     async execute({ command, timeoutMs = 120000 }) {
       const entry = ubuntuEntry();
+      // proot-entry.sh 是 bash 脚本（依赖 ${BASH_SOURCE[0]}，shebang #!/bin/bash），必须用 bash 执行；
+      // 用 PATH 查找的 `bash`（termux $PREFIX/bin/bash），不硬编码 /bin/bash 依赖 LD_PRELOAD 重路由。
+      const shell = 'bash';
       try {
-        const { stdout, stderr } = await execFileAsync('/bin/bash', [entry, '-lc', command], {
+        const { stdout, stderr } = await execFileAsync(shell, [entry, '-lc', command], {
           timeout: timeoutMs, maxBuffer: 32 * 1024 * 1024,
         });
         return { ok: true, stdout: (stdout || '').trim(), stderr: (stderr || '').trim() };

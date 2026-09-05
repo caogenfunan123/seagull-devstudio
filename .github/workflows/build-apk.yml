@@ -125,8 +125,8 @@ jobs:
               "https://bitbucket.org/iBotPeaches/apktool/downloads/apktool_2.9.3.jar"
             curl -sL -o app/src/main/assets/tools/jadx.zip \
               "https://github.com/skylot/jadx/releases/download/v1.5.0/jadx-1.5.0.zip"
-            curl -sL -o app/src/main/assets/tools/radare2.tar.xz \
-              "https://github.com/radareorg/radare2/releases/download/5.9.8/radare2-5.9.8.tar.xz"
+            curl -sL -o app/src/main/assets/tools/radare2.tar.gz \
+              "https://github.com/radareorg/radare2/releases/download/5.9.8/radare2-5.9.8-android-aarch64.tar.gz"
             curl -sL -o app/src/main/assets/tools/rizin.tar.gz \
               "https://github.com/rizinorg/rizin/releases/download/v0.7.4/rizin-v0.7.4-android-aarch64.tar.gz"
             # Ubuntu 24.04 rootfs（proot-distro 官方 v4.18.0 资产）

@@ -634,6 +634,12 @@ if ! [ -e "$B/bin/java" ]; then
     ln -sf "$(dirname "$JRE_BIN")/javac" "$B/bin/javac" 2>/dev/null || true
   fi
 fi
+# keytool 链接独立补：与 java 链接解耦，避免「旧版脚本已建 java 链接 → 本次不补 keytool」的幂等缺口
+# （apk-tools 的 keystore_gen/apk_build_sign 依赖 usr/bin/keytool）。
+if ! [ -e "$B/bin/keytool" ]; then
+  KT="$(find "$B" -path '*/bin/keytool' -type f 2>/dev/null | head -1)"
+  [ -n "$KT" ] && ln -sf "$KT" "$B/bin/keytool" 2>/dev/null || true
+fi
 echo "[install-java-tools] 冒烟验证…"
 "$B/bin/java" -version 2>&1 | head -1
 if [ -x "$B/bin/apktool" ]; then "$B/bin/apktool" --version 2>/dev/null | head -1 || true; fi

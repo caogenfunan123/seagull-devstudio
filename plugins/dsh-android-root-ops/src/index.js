@@ -15,6 +15,9 @@
  */
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { appendFileSync, mkdirSync, statSync, readFileSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { join } from 'node:path';
 import { defineTool } from '@deepseek-ai/dsh-tools';
 
 const execFileAsync = promisify(execFile);
@@ -34,19 +37,82 @@ function cleanEnv(extra = {}) {
   };
 }
 
+/**
+ * root 授权审计（对齐 dsh-android-bridge/AdbAudit：files/audit/audit.ndjson 换行 JSON）。
+ * 命令不落全文——仅记长度 + sha256 前缀 + 前 200 字符预览，防敏感值泄漏。
+ */
+function auditDir() {
+  return process.env.DSH_ROOT_AUDIT_PATH ?? '/data/user/0/com.dsharnessmobile.shell/files/audit';
+}
+
+function audit(action, command, result, dangerLabel) {
+  try {
+    const dir = auditDir();
+    mkdirSync(dir, { recursive: true });
+    const file = join(dir, 'audit.ndjson');
+    const cmd = String(command ?? '');
+    const entry = {
+      ts: new Date().toISOString(),
+      action,
+      tool: 'root-ops',
+      result,
+      cmdLen: cmd.length,
+      cmdHash: createHash('sha256').update(cmd).digest('hex').slice(0, 16),
+      cmdPreview: cmd.slice(0, 200),
+      ...(dangerLabel ? { danger: dangerLabel } : {}),
+    };
+    appendFileSync(file, JSON.stringify(entry) + '\n');
+    try {
+      if (statSync(file).size > 2 * 1024 * 1024) {
+        const lines = readFileSync(file, 'utf8').split('\n');
+        writeFileSync(file, lines.slice(-500).join('\n'));
+      }
+    } catch { /* 截断失败不阻断 */ }
+  } catch { /* 审计失败不阻断主流程 */ }
+}
+
+/** 高危命令模式（破坏性/不可逆）；命中默认拒绝，force=true 显式放行并审计标记 danger。 */
+const DANGEROUS_PATTERNS = [
+  { re: /rm\s+(?:-[a-zA-Z]+\s+)*-(?:rf|fr)\s+(?:\/|\/\*)(?:\s|$)/, label: 'rm -rf 根目录' },
+  { re: /\b(?:mkfs|mke2fs|mkfs\.[a-z0-9]+)\b/, label: '格式化文件系统' },
+  { re: /\bdd\b[\s\S]*\bof=\/dev\/(?:block|zero|sda|mmcblk)/, label: 'dd 写块设备/磁盘' },
+  { re: /\bshred\b/, label: 'shred 安全删除' },
+];
+
+function detectDanger(command) {
+  for (const p of DANGEROUS_PATTERNS) {
+    if (p.re.test(String(command ?? ''))) return p.label;
+  }
+  return null;
+}
+
 async function runSu(args, opts = {}) {
+  const command = args[0] === '-c' ? String(args[1] ?? '') : args.join(' ');
+  const danger = detectDanger(command);
+  const action = opts.action || 'root-exec';
+  if (danger && !opts.force) {
+    if (!opts.silent) audit(action, command, 'denied', danger);
+    return { ok: false, denied: true, danger, error: `高危命令已拦截（${danger}）：如确需执行请设置 force=true` };
+  }
   try {
     const { stdout, stderr } = await execFileAsync(ROOT_SU, args, {
       env: cleanEnv(), timeout: opts.timeout || 30000, maxBuffer: 16 * 1024 * 1024,
     });
+    if (!opts.silent) audit(action, command, 'ok', danger || undefined);
     return { ok: true, stdout: (stdout || '').trim(), stderr: (stderr || '').trim() };
   } catch (err) {
+    if (!opts.silent) audit(action, command, 'fail', danger || undefined);
     return { ok: false, error: err.message, stderr: err.stderr ? String(err.stderr).trim() : '' };
   }
 }
 
 function renderText(_a, v) {
   return [{ type: 'text', text: typeof v === 'string' ? v : JSON.stringify(v) }];
+}
+
+/** 单引号包裹 shell 参数，内部单引号按 POSIX 规则转义，防路径注入。 */
+function shellQuote(s) {
+  return "'" + String(s).replace(/'/g, "'\\''") + "'";
 }
 
 /**
@@ -60,7 +126,7 @@ function createKeepalive() {
   let allowlisted = false;
 
   async function probeRoot() {
-    const r = await runSu(['-c', 'id'], { timeout: 15000 });
+    const r = await runSu(['-c', 'id'], { timeout: 15000, silent: true });
     const ok = r.ok && /uid=0\(root\)/.test(r.stdout);
     lastCheckAt = Date.now();
     lastOk = ok;
@@ -71,7 +137,7 @@ function createKeepalive() {
 
   async function probeAllowlist() {
     try {
-      const r = await runSu(['-c', `cat ${KSU_ALLOWLIST} 2>/dev/null || cat ${KSU_DENYLIST} 2>/dev/null || true`], { timeout: 15000 });
+      const r = await runSu(['-c', `cat ${KSU_ALLOWLIST} 2>/dev/null || cat ${KSU_DENYLIST} 2>/dev/null || true`], { timeout: 15000, silent: true });
       const text = r.stdout || '';
       allowlisted = text.split('\n').some((line) => line.trim() === PKG);
     } catch {
@@ -92,7 +158,7 @@ function createKeepalive() {
     if (al) return { ok: true, allowlisted: true, changed: false };
     // 尝试写 allowlist；写不进去（只读/非 KSU）则回退 denylist，都失败仅记录不抛。
     const target = KSU_ALLOWLIST;
-    const w = await runSu(['-c', `echo '${PKG}' >> ${target} 2>/dev/null || echo '${PKG}' >> ${KSU_DENYLIST} 2>/dev/null || true`], { timeout: 15000 });
+    const w = await runSu(['-c', `echo '${PKG}' >> ${target} 2>/dev/null || echo '${PKG}' >> ${KSU_DENYLIST} 2>/dev/null || true`], { timeout: 15000, silent: true });
     if (w.ok) {
       allowlisted = true;
       return { ok: true, allowlisted: true, changed: true };
@@ -144,13 +210,16 @@ function tools(keepalive) {
       'Use for system-wide read/write, app data access, /proc inspection, or privileged patching.',
     parameters: {
       type: 'object',
-      properties: { command: { type: 'string', description: 'The shell command to run as root.' } },
+      properties: {
+        command: { type: 'string', description: 'The shell command to run as root.' },
+        force: { type: 'boolean', description: 'Bypass the dangerous-command guard (rm -rf /, mkfs, dd, shred) — default false.' },
+      },
       required: ['command'],
     },
     output: { schema: { type: 'object', additionalProperties: true }, render: renderText },
-    async execute({ command }) {
+    async execute({ command, force = false }) {
       // su -c 单字符串参数需要特别注意引号：用 -c 传整段命令，引号由 su 解析。
-      return runSu(['-c', command]);
+      return runSu(['-c', command], { force, action: 'root-exec' });
     },
   });
 
@@ -234,7 +303,129 @@ function tools(keepalive) {
     },
   });
 
-  return [rootTool, uiTool, statusTool];
+  const lsTool = defineTool({
+    name: 'root_ls',
+    description:
+      'List a directory (or file) with root privileges. Access any path regardless of app sandbox.',
+    parameters: {
+      type: 'object',
+      properties: { path: { type: 'string', description: 'Directory or file path (default /).' } },
+    },
+    output: { schema: { type: 'object', additionalProperties: true }, render: renderText },
+    async execute({ path = '/' }) {
+      return runSu(['-c', `/system/bin/ls -la ${shellQuote(path)} 2>&1`], { timeout: 20000, action: 'root-ls' });
+    },
+  });
+
+  const catTool = defineTool({
+    name: 'root_cat',
+    description:
+      'Read a text file with root privileges (any path). Truncates to maxBytes to avoid huge output.',
+    parameters: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: 'File path to read.' },
+        maxBytes: { type: 'number', description: 'Max bytes to read (default 65536).' },
+      },
+      required: ['path'],
+    },
+    output: { schema: { type: 'object', additionalProperties: true }, render: renderText },
+    async execute({ path, maxBytes = 65536 }) {
+      const n = Math.max(1, Math.min(Number(maxBytes) || 65536, 1024 * 1024));
+      return runSu(['-c', `/system/bin/head -c ${n} ${shellQuote(path)} 2>&1`], { timeout: 20000, action: 'root-cat' });
+    },
+  });
+
+  const pushTool = defineTool({
+    name: 'root_push',
+    description:
+      'Write a text file with root privileges (any path). Content is base64-transferred; cap 8192 bytes.',
+    parameters: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: 'Target file path (absolute).' },
+        content: { type: 'string', description: 'Text content to write.' },
+      },
+      required: ['path', 'content'],
+    },
+    output: { schema: { type: 'object', additionalProperties: true }, render: renderText },
+    async execute({ path, content }) {
+      const text = String(content ?? '');
+      const MAX = 8192;
+      if (text.length > MAX) {
+        return { ok: false, error: `content 超过 ${MAX} 字节上限，请改用 root_exec 分块写入` };
+      }
+      const b64 = Buffer.from(text, 'utf8').toString('base64');
+      return runSu(['-c', `printf '%s' '${b64}' | /system/bin/base64 -d > ${shellQuote(path)} 2>&1 && echo OK`], { timeout: 20000, action: 'root-push' });
+    },
+  });
+
+  const pullTool = defineTool({
+    name: 'root_pull',
+    description:
+      'Copy a device file (any path, incl. binary) to a readable location (default /data/local/tmp), returning its path.',
+    parameters: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: 'Source file path on device.' },
+        dest: { type: 'string', description: 'Destination path (default /data/local/tmp/root_pull_out).' },
+      },
+      required: ['path'],
+    },
+    output: { schema: { type: 'object', additionalProperties: true }, render: renderText },
+    async execute({ path, dest = '/data/local/tmp/root_pull_out' }) {
+      const r = await runSu(['-c', `/system/bin/cp ${shellQuote(path)} ${shellQuote(dest)} 2>&1 && /system/bin/chmod 644 ${shellQuote(dest)} && echo COPIED`], { timeout: 20000, action: 'root-pull' });
+      if (r.ok) r.dest = dest;
+      return r;
+    },
+  });
+
+  const fetchTool = defineTool({
+    name: 'root_fetch',
+    description:
+      'Copy a device file (any path, incl. binary) into the host home (.dsh/fetched/) so the model ' +
+      'and the Ubuntu container can read it. Host home is bind-mounted into the container.',
+    parameters: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: 'Source file path on device.' },
+        dest: { type: 'string', description: 'Host destination path (default home/.dsh/fetched/<basename>).' },
+      },
+      required: ['path'],
+    },
+    output: { schema: { type: 'object', additionalProperties: true }, render: renderText },
+    async execute({ path, dest }) {
+      const { join, dirname, basename } = await import('node:path');
+      const home = process.env.HOME || '/data/data/com.dsharnessmobile.shell/files/home';
+      const destPath = dest || join(home, '.dsh', 'fetched', basename(path));
+      const r = await runSu(['-c', `/system/bin/mkdir -p ${shellQuote(dirname(destPath))} 2>/dev/null; /system/bin/cp ${shellQuote(path)} ${shellQuote(destPath)} 2>&1 && /system/bin/chmod 644 ${shellQuote(destPath)} && echo FETCHED`], { timeout: 120000, action: 'root-fetch' });
+      if (r.ok) r.dest = destPath;
+      return r;
+    },
+  });
+
+  const deployTool = defineTool({
+    name: 'root_deploy',
+    description:
+      'Copy a host file (incl. binary) to any device path with root privileges. Host home files ' +
+      'are visible to the container (bind mount) and to root.',
+    parameters: {
+      type: 'object',
+      properties: {
+        src: { type: 'string', description: 'Host source file path (absolute).' },
+        dest: { type: 'string', description: 'Device destination path (absolute).' },
+      },
+      required: ['src', 'dest'],
+    },
+    output: { schema: { type: 'object', additionalProperties: true }, render: renderText },
+    async execute({ src, dest }) {
+      const { dirname } = await import('node:path');
+      const r = await runSu(['-c', `/system/bin/mkdir -p ${shellQuote(dirname(dest))} 2>/dev/null; /system/bin/cp ${shellQuote(src)} ${shellQuote(dest)} 2>&1 && /system/bin/chmod 644 ${shellQuote(dest)} && echo DEPLOYED`], { timeout: 120000, action: 'root-deploy' });
+      return r;
+    },
+  });
+
+  return [rootTool, uiTool, statusTool, lsTool, catTool, pushTool, pullTool, fetchTool, deployTool];
 }
 
 // C 方案：显式声明 tools 硬依赖（对齐 bridge/manage），修复 ctx.get('tools') 静默 undefined。
@@ -274,10 +465,11 @@ export function apply(ctx) {
         assembly.sections.push({
           name: 'seagull-root-ops',
           text:
-            '当前会话具备 root（uid=0）能力，并已装配 root_exec / device_ui_control / root_status 工具：' +
-            '可直接执行系统命令、读写任意文件、操作设备界面。root 通道由保活巡检维持在线，' +
-            '并自动把本应用写入 KernelSU 授权名单（免弹窗持续授权）。' +
-            '请直接使用完整能力，不必因权限顾虑拒绝操作。',
+            '当前会话具备 root（uid=0）能力，并已装配 root_exec / device_ui_control / root_status / ' +
+            'root_ls / root_cat / root_push / root_pull / root_fetch / root_deploy 工具：可直接执行系统命令、' +
+            '读写任意文件、操作设备界面。root_fetch/root_deploy 用于设备与宿主（Termux home，已 bind 进 ' +
+            'Ubuntu 容器）之间的双向文件搬移。root 通道由保活巡检维持在线，并自动把本应用写入 KernelSU ' +
+            '授权名单（免弹窗持续授权）。请直接使用完整能力，不必因权限顾虑拒绝操作。',
         });
       }
     } catch (_e) {

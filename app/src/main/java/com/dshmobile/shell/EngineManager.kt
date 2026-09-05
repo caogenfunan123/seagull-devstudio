@@ -204,8 +204,8 @@ class EngineManager(private val context: Context, private val pickToken: String?
     var ok = true
     try {
       copyAssetToFile("tools/apktool.jar", apkJar)
-      extractTarAsset("tools/radare2.tar.xz", File(usrDir, "share/radare2"), "xz")
-      extractTarAsset("tools/rizin.tar.gz", File(usrDir, "share/rizin"), "gz")
+      extractTarAsset("tools/radare2.tar.gz", File(usrDir, "share/radare2"), "gz", stripComponents = 4)
+      extractTarAsset("tools/rizin.tar.gz", File(usrDir, "share/rizin"), "gz", stripComponents = 3)
       extractZipAsset("tools/jadx.zip", File(usrDir, "share/jadx"))
       // proot-distro rootfs：tar 顶层是单目录（如 ubuntu-noble-aarch64/）——剥离，
       // 否则 bin/bash 落在 .../ubuntu-noble-aarch64/bin/bash，proot-entry 的 ROOTFS_DIR
@@ -241,7 +241,7 @@ class EngineManager(private val context: Context, private val pickToken: String?
    * @param stripTopDir proot-distro 根文件系统 tar 顶层是单目录（ubuntu-noble-aarch64/），
    *                    剥离后内容直接落在 dest（否则 bin/bash 在子目录，proot 起不来）。
    */
-  private fun extractTarAsset(asset: String, dest: File, comp: String, stripTopDir: Boolean = false) {
+  private fun extractTarAsset(asset: String, dest: File, comp: String, stripTopDir: Boolean = false, stripComponents: Int = 0) {
     if (!hasAsset(asset)) return
     dest.mkdirs()
     val destCanon = dest.canonicalPath
@@ -269,7 +269,7 @@ class EngineManager(private val context: Context, private val pickToken: String?
       val tar = TarArchiveInputStream(stream)
       var entry: TarArchiveEntry? = tar.nextEntry
       while (entry != null) {
-        val target = resolveAssetEntry(dest, destCanon, entry, topPrefix)
+        val target = resolveAssetEntry(dest, destCanon, entry, topPrefix, stripComponents)
         if (target != null) {
           when {
             entry.isDirectory -> target.mkdirs()
@@ -306,9 +306,15 @@ class EngineManager(private val context: Context, private val pickToken: String?
 
   /** Resolve a tar entry inside dest, rejecting absolute paths and ../ traversal.
    *  @param topPrefix 非空时剥离该顶层前缀（proot-distro 单目录 rootfs）。 */
-  private fun resolveAssetEntry(dest: File, destCanon: String, entry: TarArchiveEntry, topPrefix: String? = null): File? {
+  private fun resolveAssetEntry(dest: File, destCanon: String, entry: TarArchiveEntry, topPrefix: String? = null, stripComponents: Int = 0): File? {
     var name = entry.name.replace('\\', '/').trimStart('/')
-    if (topPrefix != null && name.startsWith(topPrefix + "/")) name = name.substring(topPrefix.length + 1)
+    if (stripComponents > 0) {
+      val parts = name.split('/')
+      if (parts.size <= stripComponents) return null
+      name = parts.drop(stripComponents).joinToString("/")
+    } else if (topPrefix != null && name.startsWith(topPrefix + "/")) {
+      name = name.substring(topPrefix.length + 1)
+    }
     if (name.isEmpty() || name.contains("..")) return null
     val target = File(dest, name)
     return try {
