@@ -346,10 +346,13 @@ class EngineManager(private val context: Context, private val pickToken: String?
     Log.i(TAG, "tool asset: $asset -> " + dest.absolutePath)
   }
 
-  /** Write the proot-entry.sh launcher the dev-tools/apk-tools plugins invoke. */
+  /** Write the proot-entry.sh launcher the dev-tools plugin (ubuntu_exec) invokes. */
   private fun writeProotEntry(entry: File) {
     entry.parentFile?.mkdirs()
-    val root = entry.parentFile.absolutePath
+    // 对齐 scripts/launch_ubuntu_proot.sh 的伪造 /proc 补丁：Android 内核 /proc/stat
+    // 缺桌面字段，容器内 nproc/ps/CMake -j 会读 0 核或解析失败。必须先落伪造文件，
+    // 再在 proot 命令行里 bind 到 /proc/{stat,loadavg,uptime,version}。
+    writeFakeSysdata(entry.parentFile)
     val script =
       "#!/bin/bash\n" +
         "# Seagull DevStudio Ubuntu container entry (rootfs top-level)\n" +
@@ -357,11 +360,51 @@ class EngineManager(private val context: Context, private val pickToken: String?
         "ROOTFS_DIR=\"$(cd \"$(dirname \"${'$'}{BASH_SOURCE[0]}\")\" && pwd)\"\n" +
         "PROOT_BIN=\"${'$'}{PROOT_BIN:-${'$'}(command -v proot || echo ${'$'}PREFIX/bin/proot)}\"\n" +
         "exec \"${'$'}PROOT_BIN\" --link2symlink --kill-on-exit -0 -r \"${'$'}ROOTFS_DIR\" " +
-        "-b /dev -b /proc -b /sys -b /storage -b \"${'$'}{HOME}:${'$'}{HOME}\" -w \"${'$'}{HOME}\" /bin/bash \"${'$'}@\"\n"
+        "-b /dev -b /proc -b /sys -b /storage " +
+        "-b \"${'$'}ROOTFS_DIR/proc/.stat:/proc/stat\" " +
+        "-b \"${'$'}ROOTFS_DIR/proc/.loadavg:/proc/loadavg\" " +
+        "-b \"${'$'}ROOTFS_DIR/proc/.uptime:/proc/uptime\" " +
+        "-b \"${'$'}ROOTFS_DIR/proc/.version:/proc/version\" " +
+        "-b \"${'$'}{HOME}:${'$'}{HOME}\" -w \"${'$'}{HOME}\" /bin/bash \"${'$'}@\"\n"
     java.nio.file.Files.deleteIfExists(entry.toPath())
     entry.writeText(script)
     entry.setExecutable(true, false)
     Log.i(TAG, "proot-entry.sh written at " + entry.absolutePath)
+  }
+
+  /**
+   * 伪造受限 /proc 节点（与 scripts/setup_fake_sysdata.sh 内容一致）。Android 内核的
+   * /proc/stat 缺少桌面 Linux 字段，Ubuntu 内 nproc/ps/CMake 等依赖 /proc/stat 的工具会
+   * 读到 0 核或解析失败；proot-entry 里 bind 这些伪造文件覆盖容器内 /proc 对应节点。
+   */
+  private fun writeFakeSysdata(rootfs: File?) {
+    if (rootfs == null) return
+    val proc = File(rootfs, "proc")
+    val sysEmpty = File(rootfs, "sys/.empty")
+    proc.mkdirs()
+    sysEmpty.mkdirs()
+    val stat =
+      "cpu  1957 0 2877 93280 262 342 254 87 0 0\n" +
+        "cpu0 31 0 226 12027 82 10 4 9 0 0\n" +
+        "cpu1 45 0 664 11144 21 263 233 12 0 0\n" +
+        "cpu2 494 0 537 11283 27 10 3 8 0 0\n" +
+        "cpu3 359 0 234 11723 24 26 5 7 0 0\n" +
+        "intr 127541 38 290 0 0 0 0 4 0 1 0 0\n" +
+        "ctxt 140223\n" +
+        "btime 1680020856\n" +
+        "processes 772\n" +
+        "procs_running 2\n" +
+        "procs_blocked 0\n"
+    val fake = mapOf(
+      ".loadavg" to "0.12 0.07 0.02 2/165 765\n",
+      ".stat" to stat,
+      ".uptime" to "3456.78 27654.32\n",
+      ".version" to "Linux version 6.1.0-seagull-arm64 (gcc 13.2.0) #1 SMP PREEMPT\n",
+    )
+    for ((name, content) in fake) {
+      val f = File(proc, name)
+      if (!f.exists()) f.writeText(content)
+    }
   }
 
   /** Whether an asset exists in the APK (guards optional tools). */

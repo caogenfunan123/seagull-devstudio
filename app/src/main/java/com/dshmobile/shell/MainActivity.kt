@@ -1438,7 +1438,7 @@ class MainActivity : ComponentActivity() {
     GuidePhase.Undoing -> "正在把配置/插件回滚到最后良好快照（自动回撤）。"
     GuidePhase.Error -> "可打开控制台查看 engine.log，或点击重试。"
     GuidePhase.Closed -> "引擎已停止，不会自动恢复。"
-    GuidePhase.Idle -> "引擎就绪后将进入 DeepCode。"
+    GuidePhase.Idle -> "引擎就绪后将进入 Seagull DevStudio。"
   }
 
   private fun setStatusPulse(on: Boolean) {
@@ -1662,12 +1662,13 @@ class MainActivity : ComponentActivity() {
           // 引擎进程已死：宣判失败（自动回退路径），不再空等。
           break
         }
-        waitedSeconds = ((budgetEnd - System.currentTimeMillis()) / pollStepMs).toInt()
-        if (waitedSeconds % 15 == 0) {
+        val elapsedSec = (pollBudgetMs - (budgetEnd - System.currentTimeMillis())) / pollStepMs
+        if (elapsedSec % 15 == 0 && elapsedSec > waitedSeconds) {
+          waitedSeconds = elapsedSec.toInt()
           val s = waitedSeconds
           runOnUiThread {
             if (!isCurrentEngineFlow(generation)) return@runOnUiThread
-            applyGuidePhase(GuidePhase.Starting, "引擎启动中（已等待 ${60 - s}s，冷启动较慢属正常）")
+            applyGuidePhase(GuidePhase.Starting, "引擎启动中（已等待 ${s}s，冷启动较慢属正常）")
           }
         }
         Thread.sleep(pollStepMs)

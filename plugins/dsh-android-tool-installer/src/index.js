@@ -6,22 +6,15 @@
  * C 方案修复 (2026-09-01)：对齐 dsh-android-bridge 成功模式——
  *   inject 声明 tools 硬依赖 + defineTool 包装工具，修复 ctx.get('tools') 静默 undefined。
  */
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
 import { mkdirSync, existsSync, createWriteStream } from 'node:fs';
 import { dirname, join } from 'node:path';
 import https from 'node:https';
 import { defineTool } from '@deepseek-ai/dsh-tools';
 
-const execFileAsync = promisify(execFile);
-
 // 运行时前缀由引擎 shellEnv() 注入（TERMUX__PREFIX/PREFIX），回退到本 fork 安装包路径。
 // 本 fork applicationId = com.dsharnessmobile.shell（编译安装后即此路径）。
 function runtimePrefix() {
   return process.env.TERMUX__PREFIX || process.env.PREFIX || '/data/data/com.dsharnessmobile.shell/files/usr';
-}
-function runtimeHome() {
-  return process.env.HOME || '/data/data/com.dsharnessmobile.shell/files/home';
 }
 const USR = runtimePrefix();
 
@@ -72,10 +65,6 @@ function downloadFile(url, dest) {
   });
 }
 
-function prootEntry() {
-  return runtimeHome() + '/.dsh/ubuntu-rootfs/proot-entry.sh';
-}
-
 function renderText(_a, v) {
   return [{ type: 'text', text: typeof v === 'string' ? v : JSON.stringify(v) }];
 }
@@ -99,15 +88,12 @@ function buildService() {
       if (existsSync(info.installPath)) return { ok: true, alreadyInstalled: true };
       try {
         await downloadFile(info.source, info.installPath + '.download');
-        // move into place via plain fs (no proot dependency for bare files)
-        const entry = prootEntry();
-        if (existsSync(entry)) {
-          await execFileAsync('/bin/bash', [entry, '-lc',
-            'mv ' + info.installPath + '.download ' + info.installPath], { timeout: 300000 });
-        } else {
-          const { renameSync } = await import('node:fs');
-          renameSync(info.installPath + '.download', info.installPath);
-        }
+        // move into place via plain fs rename: .download 与 installPath 同目录，
+        // 不跨设备，宿主侧 renameSync 原子完成。切勿经 proot 容器 mv——proot-entry
+        // 只 bind /dev /proc /sys /storage 与 $HOME，未 bind 宿主 files/usr，容器内
+        // 看不到下载文件（源缺失，安装必失败）。
+        const { renameSync } = await import('node:fs');
+        renameSync(info.installPath + '.download', info.installPath);
         return { ok: true, installed: true, path: info.installPath };
       } catch (err) {
         return { ok: false, error: err.message };

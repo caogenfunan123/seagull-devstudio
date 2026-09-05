@@ -187,8 +187,18 @@ function tools(keepalive) {
           return runSu(['-c', `/system/bin/input tap ${x} ${y}`]);
         case 'swipe':
           return runSu(['-c', `/system/bin/input swipe ${x} ${y} ${x2} ${y2} 300`]);
-        case 'input_text':
-          return runSu(['-c', `/system/bin/input text ${JSON.stringify(String(text))}`]);
+        case 'input_text': {
+          const raw = String(text ?? '')
+          // 对齐 dsh-android-manage input text 语义：可见 ASCII + 无 shell 元字符，空格转 %s。
+          // su -c 会经 shell 二次解析，JSON.stringify 的双引号/反斜杠会被原样输入，故弃用之。
+          if (raw.length === 0 || raw.length > 500) {
+            return { ok: false, error: 'input_text 长度需为 1-500 字符' };
+          }
+          if (!/^[\x20-\x7E]+$/.test(raw) || /[\\'"`$;&|<>*?(){}[\]\n\r]/.test(raw)) {
+            return { ok: false, error: 'input_text 仅允许可见 ASCII（不含 shell 元字符）；非 ASCII 请走 ADBKeyboard 广播' };
+          }
+          return runSu(['-c', `/system/bin/input text ${raw.replace(/ /g, '%s')}`]);
+        }
         case 'keyevent':
           return runSu(['-c', `/system/bin/input keyevent ${keyCode}`]);
         default:

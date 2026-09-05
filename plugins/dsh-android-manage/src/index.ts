@@ -570,7 +570,7 @@ function tools(priv: PrivilegeFace) {
         return { ok: false, denied: false, channel, text: 'ADBKeyboard IME 未安装：中文输入暂不可用（0.13.2 内嵌 IME 落地后解除）；ASCII 文本可用 input text' }
       }
       if (channel === 'adbkeyboard' && /broadcast not sent|no handlers|No receivers/.test(r.stdout)) {
-        return { ok: false, denied: false, channel, text: 'ADB 输入通道未生效：请在系统输入法设置中把「DeepSeek ADB 输入通道」切换为当前输入法后再试（ascii 文本不受影响）' }
+        return { ok: false, denied: false, channel, text: 'ADB 输入通道未生效：请在系统输入法设置中把「Seagull ADB 输入通道」切换为当前输入法后再试（ascii 文本不受影响）' }
       }
       return { ok: !errMark, denied: false, channel, text: errMark ? '输入返回异常：' + r.stdout.slice(0, 300) : `已输入 ${raw.slice(0, 24)}${raw.length > 24 ? '…' : ''}（${channel}）` }
     },

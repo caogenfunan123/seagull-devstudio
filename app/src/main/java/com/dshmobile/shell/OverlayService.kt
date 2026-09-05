@@ -99,7 +99,7 @@ class OverlayService : Service() {
     val ring = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(Color.WHITE) }
     val whale = ImageView(this).apply {
       setImageDrawable(resources.getDrawable(R.drawable.ic_launcher_foreground, null))
-      contentDescription = "DeepSeek 引擎状态"
+      contentDescription = "Seagull 引擎状态"
     }
     val ball = LinearLayout(this).apply {
       orientation = LinearLayout.VERTICAL
@@ -242,6 +242,7 @@ class OverlayService : Service() {
     val close = TextView(this).apply {
       text = "收起"; setTextColor(0xFF8AB4F8.toInt()); textSize = 13f
       setPadding((10 * dp).toInt(), 0, 0, 0)
+      setOnClickListener { hidePanel() }
     }
     header.addView(statusText, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
     header.addView(close)
