@@ -360,24 +360,28 @@ class EngineManager(private val context: Context, private val pickToken: String?
     // 再在 proot 命令行里 bind 到 /proc/{stat,loadavg,uptime,version}。
     writeFakeSysdata(entry.parentFile)
     val prootBin = File(usrDir, "bin/proot").absolutePath
-    val script =
-      "#!/bin/bash\n" +
-        "# Seagull DevStudio Ubuntu container entry (rootfs top-level)\n" +
-        "set -eu\n" +
-        "ROOTFS_DIR=\"$(cd \"$(dirname \"${'$'}{BASH_SOURCE[0]}\")\" && pwd)\"\n" +
-        "# proot 默认用编译期 Termux tmp（/data/data/com.termux/...）建 glue rootfs，app 域不存在\n" +
-        "# 该路径 → glue rootfs 建不出、execve 失败。必须显式指向可写目录（TMPDIR 由引擎注入）。\n" +
-        "export PROOT_TMP_DIR=\"${'$'}{TMPDIR:-${'$'}HOME/tmp}\"\n" +
-        "mkdir -p \"${'$'}PROOT_TMP_DIR\"\n" +
-        "# proot 绝对路径由壳侧写入，不依赖 ${'$'}PREFIX/command -v（引擎 env 无 PREFIX 变量）。\n" +
-        "PROOT_BIN=\"${'$'}{PROOT_BIN:-" + prootBin + "}\"\n" +
-        "exec \"${'$'}PROOT_BIN\" --link2symlink --kill-on-exit -0 -r \"${'$'}ROOTFS_DIR\" " +
-        "-b /dev -b /proc -b /sys -b /storage " +
-        "-b \"${'$'}ROOTFS_DIR/proc/.stat:/proc/stat\" " +
-        "-b \"${'$'}ROOTFS_DIR/proc/.loadavg:/proc/loadavg\" " +
-        "-b \"${'$'}ROOTFS_DIR/proc/.uptime:/proc/uptime\" " +
-        "-b \"${'$'}ROOTFS_DIR/proc/.version:/proc/version\" " +
-        "-b \"${'$'}{HOME}:${'$'}{HOME}\" -w \"${'$'}{HOME}\" /bin/bash \"${'$'}@\"\n"
+    val script = """#!/bin/bash
+# Seagull DevStudio Ubuntu container entry (rootfs top-level)
+# 优先 root chroot（KernelSU/Magisk su 可用时）；无 root 时 fallback proot。
+ROOTFS_DIR="${'$'}(cd "${'$'}(dirname "${'$'}{BASH_SOURCE[0]}")" && pwd)"
+# 提取命令：兼容 `-lc CMD`（ubuntu_exec 默认）与直接 `CMD...`。
+if [ "${'$'}{1:-}" = "-lc" ] || [ "${'$'}{1:-}" = "-c" ]; then CMD="${'$'}{2:-}"; else CMD="${'$'}*"; fi
+# ---- Root chroot 路径（su 可用时）----
+if [ -x /system/bin/su ]; then
+  CMD_B64="${'$'}(printf '%s' "${'$'}CMD" | base64 | tr -d '\n')"
+  exec /system/bin/su -c "export PATH=/system/bin:/system/xbin:/system/usr/bin; export LD_LIBRARY_PATH=/system/lib64:/system/lib; export LD_PRELOAD=; R='${'$'}ROOTFS_DIR'; mount -t proc proc \"\${'$'}R/proc\" 2>/dev/null; mount -t sysfs sys \"\${'$'}R/sys\" 2>/dev/null; mount -o bind /dev \"\${'$'}R/dev\" 2>/dev/null; mount -t devpts devpts \"\${'$'}R/dev/pts\" 2>/dev/null; [ -s \"\${'$'}R/etc/resolv.conf\" ] || printf 'nameserver 8.8.8.8\nnameserver 114.114.114.114\n' > \"\${'$'}R/etc/resolv.conf\"; C=\$(printf '%s' '${'$'}CMD_B64' | base64 -d 2>/dev/null); exec chroot \"\${'$'}R\" /usr/bin/env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin HOME=/root TERM=xterm LANG=C.UTF-8 /bin/bash -lc \"\${'$'}C\""
+fi
+# ---- proot fallback ----
+export PROOT_TMP_DIR="${'$'}{TMPDIR:-${'$'}HOME/tmp}"
+mkdir -p "${'$'}PROOT_TMP_DIR"
+PROOT_BIN="${'$'}{PROOT_BIN:-$prootBin}"
+U="${'$'}{PROOT_BIN%/bin/proot}"
+export PROOT_LOADER="${'$'}U/libexec/proot/loader"
+export PROOT_LOADER_32="${'$'}U/libexec/proot/loader32"
+# 清理 termux-exec 的 execve 拦截（会把 guest 路径改写成宿主 PREFIX 路径，导致 proot execve 失败）。
+unset LD_PRELOAD TERMUX_EXEC__EXECVE_CALL__INTERCEPT TERMUX_EXEC__SYSTEM_LINKER_EXEC__MODE TERMUX_EXEC__PROC_SELF_EXE
+exec "${'$'}PROOT_BIN" --link2symlink --kill-on-exit -0 -r "${'$'}ROOTFS_DIR" -b /dev -b /proc -b /sys -b /storage -b "${'$'}ROOTFS_DIR/proc/.stat:/proc/stat" -b "${'$'}ROOTFS_DIR/proc/.loadavg:/proc/loadavg" -b "${'$'}ROOTFS_DIR/proc/.uptime:/proc/uptime" -b "${'$'}ROOTFS_DIR/proc/.version:/proc/version" -b "${'$'}{HOME}:${'$'}{HOME}" -w "${'$'}{HOME}" /bin/bash "${'$'}@"
+"""
     java.nio.file.Files.deleteIfExists(entry.toPath())
     entry.writeText(script)
     entry.setExecutable(true, false)

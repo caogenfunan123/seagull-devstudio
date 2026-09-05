@@ -129,9 +129,13 @@ jobs:
               "https://github.com/radareorg/radare2/releases/download/5.9.8/radare2-5.9.8-android-aarch64.tar.gz"
             curl -sL -o app/src/main/assets/tools/rizin.tar.gz \
               "https://github.com/rizinorg/rizin/releases/download/v0.7.4/rizin-v0.7.4-android-aarch64.tar.gz"
-            # Ubuntu 24.04 rootfs（proot-distro 官方 v4.18.0 资产）
-            curl -sL -o app/src/main/assets/ubuntu-rootfs.tar.xz \
+            # Ubuntu 24.04 rootfs：下载官方 minbase 资产 -> qemu chroot 注入编译工具链 -> 重打包
+            # （minbase 无 gcc/g++/make/cmake/java/git，直接打包会导致容器开箱无法编译）
+            curl -sL -o /tmp/ubuntu-minbase.tar.xz \
               "https://github.com/termux/proot-distro/releases/download/v4.18.0/ubuntu-noble-aarch64-pd-v4.18.0.tar.xz"
+            test -s /tmp/ubuntu-minbase.tar.xz || { echo "minbase rootfs 下载失败"; exit 1; }
+            bash scripts/inject-ubuntu-toolchain.sh \
+              /tmp/ubuntu-minbase.tar.xz app/src/main/assets/ubuntu-rootfs.tar.xz arm64
             du -sh app/src/main/assets/tools app/src/main/assets/ubuntu-rootfs.tar.xz
           fi
 
