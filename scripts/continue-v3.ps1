@@ -6,7 +6,7 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 $Root = "D:\coding\dsh-mobile"
-$Out = Join-Path $Root "out\v0.13.0"
+$Out = Join-Path $Root "out\v0.13.2-seagull"
 $apkDir = Join-Path $Root "dsh-mobile-apk"
 $work = Join-Path $Root ".deploy-tmp\build-\13-$Abi"
 $snapIn = Join-Path $work "snap-final2.tar.xz"
@@ -42,7 +42,7 @@ Push-Location $apkDir
 try {
     & .\gradlew :app:assembleDebug --no-daemon -PversionNameSuffix="$Suffix" 2>&1 | Select-Object -Last 4
     if ($LASTEXITCODE -ne 0) { throw "gradle 构建失败（$Abi）" }
-    $ver = "0.13.0$Suffix"
+    $ver = "0.13.2-seagull$Suffix"
     Copy-Item "app\build\outputs\apk\debug\app-debug.apk" (Join-Path $Out "dsh-mobile-apk-v$ver-$Abi.apk") -Force
     Write-Host "产物: $Out\dsh-mobile-apk-v$ver-$Abi.apk"
 } finally {

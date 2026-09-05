@@ -8,7 +8,7 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 $Root = Split-Path -Parent $PSScriptRoot
-$Out = Join-Path $Root "out\v0.13.0"
+$Out = Join-Path $Root "out\v0.13.2-seagull"
 $apkDir = Join-Path $Root "dsh-mobile-apk"
 New-Item -ItemType Directory -Force -Path $Out | Out-Null
 
@@ -109,7 +109,7 @@ foreach ($abi in @('arm64', 'x86_64')) {
     try {
         & .\gradlew :app:assembleDebug --no-daemon -PversionNameSuffix="$Suffix" 2>&1 | Select-Object -Last 4
         if ($LASTEXITCODE -ne 0) { throw "gradle 构建失败（$abi）" }
-        $ver = "0.13.0$Suffix"
+        $ver = "0.13.2-seagull$Suffix"
         Copy-Item "app\build\outputs\apk\debug\app-debug.apk" (Join-Path $Out "dsh-mobile-apk-v$ver-$abi.apk") -Force
         Write-Host "产物: $Out\dsh-mobile-apk-v$ver-$abi.apk"
     } finally {

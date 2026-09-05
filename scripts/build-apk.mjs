@@ -17,9 +17,9 @@ const ROOT = dirname(dirname(fileURLToPath(import.meta.url)))
 // apk 仓库目录：默认 ROOT/dsh-mobile-apk（本仓库布局）；云端 workflow 宿主若=apk 仓库（GITHUB_WORKSPACE），
 // 用 DSH_APK_DIR 覆盖（此时 ROOT 指向作为依赖签出的协调库子目录）。
 const apkDir = process.env.DSH_APK_DIR || join(ROOT, 'dsh-mobile-apk')
-const OUT = join(ROOT, 'out', 'v0.13.0')
+const OUT = join(ROOT, 'out', 'v0.13.2-seagull')
 const SUFFIX_DEFAULT = '-ci'
-const VER = '0.13.0'
+const VER = '0.13.2-seagull'
 
 // ---- 参数解析 ----
 const args = process.argv.slice(2)
