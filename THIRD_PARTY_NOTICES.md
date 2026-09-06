@@ -103,3 +103,14 @@
 |---|---|---|---|
 | @napi-rs/canvas | 1.0.8 | MIT | [Brooooooklyn/canvas](https://github.com/Brooooooklyn/canvas) |
 | @napi-rs/canvas-android-arm64 | 1.0.8 | MIT | [Brooooooklyn/canvas](https://github.com/Brooooooklyn/canvas)（napi android-arm64 预编译 binding） |
+
+## 自包含 proot native 二进制（Seagull fork 0.13.2-seagull 起）
+
+以下预编译 arm64 二进制从 Operit 项目（LGPL-3.0）terminal 子模块引入，用于 Ubuntu 容器 proot fallback
+（替换 Termux proot 依赖，坑 38）。不在 dpkg 清单内（check-third-party.mjs 只扫 dpkg，需此手工段登记）；
+GPL-2.0 全文见仓库 `LICENSES/GPL-2.0.txt`。
+
+| 组件 | 版本 | 许可证 | 上游源码 |
+|---|---|---|---|
+| proot (Operit build) | NDK r29-beta4 | GPL-2.0 | [proot-me/proot](https://github.com/proot-me/proot)（经 [AAswordman/Operit](https://github.com/AAswordman/Operit) terminal 子模块编译） |
+| proot loader | NDK r29-beta4 | GPL-2.0 | 同上（proot 编译产物） |

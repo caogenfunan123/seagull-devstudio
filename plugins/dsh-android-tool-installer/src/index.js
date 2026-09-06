@@ -56,7 +56,8 @@ const TOOL_REGISTRY = {
     installPath: join(USR, 'share', 'rizin'),
     stripComponents: 3,
     sha256: 'ff9919dfbaf23d84e7199b7a5f9f6f0a7643a5fcf0741998d503859d4b0e69a1',
-    description: 'Modern reverse engineering framework',
+    description: 'Modern reverse engineering framework. 官方 android 资产为非 PIE 静态 ELF，Android 8+ 需经 root 通道（root_exec）执行',
+    rootRequired: true,
   },
 };
 
@@ -210,7 +211,13 @@ function tools(service) {
       force: { type: 'boolean', description: 'Reinstall over the existing tool (delete then re-download).' },
     },
     output: { schema: { type: 'object', additionalProperties: true }, render: renderText },
-    async execute({ name, force = false }) { return service.install(name, { force }); },
+    async execute({ name, force = false }) {
+      const r = await service.install(name, { force });
+      if (r.ok && TOOL_REGISTRY[name] && TOOL_REGISTRY[name].rootRequired) {
+        r.note = '此工具为非 PIE 静态构建，Android 8+ 需经 root 通道（root_exec）执行';
+      }
+      return r;
+    },
   });
 
   const upgradeTool = defineTool({

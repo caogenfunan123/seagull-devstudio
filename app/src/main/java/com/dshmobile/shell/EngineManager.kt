@@ -21,6 +21,9 @@ class EngineManager(private val context: Context, private val pickToken: String?
   val usrDir = File(context.filesDir, "usr")
   val homeDir = File(context.filesDir, "home")
 
+  /** 自包含 proot 落地目录（Operit app 域定制 proot/loader，替换 Termux proot 依赖，坑 38）。 */
+  val operitNativeDir = File(usrDir, "share/operit-native")
+
   /**
    * Public export repo: /storage/emulated/0/Documents/dshdata.
    * Holds only user-initiated session zip exports (exports/) plus a .nomedia anti-scan marker;
@@ -198,7 +201,10 @@ class EngineManager(private val context: Context, private val pickToken: String?
     val apkJar = File(usrDir, "share/apktool/apktool.jar")
     val prootEntry = File(homeDir, ".dsh/ubuntu-rootfs/proot-entry.sh")
     val rootfsBash = File(homeDir, ".dsh/ubuntu-rootfs/bin/bash")
-    if (apkJar.exists() && prootEntry.exists() && rootfsBash.exists()) {
+    val operitProot = File(operitNativeDir, "proot")
+    val operitLoader = File(operitNativeDir, "loader")
+    if (apkJar.exists() && prootEntry.exists() && rootfsBash.exists() &&
+        operitProot.exists() && operitLoader.exists()) {
       return true
     }
     var ok = true
@@ -211,6 +217,12 @@ class EngineManager(private val context: Context, private val pickToken: String?
       // 否则 bin/bash 落在 .../ubuntu-noble-aarch64/bin/bash，proot-entry 的 ROOTFS_DIR
       // 指向 .dsh/ubuntu-rootfs 时找不到 /bin/bash，容器必挂（真机日志实锤）。
       extractTarAsset("ubuntu-rootfs.tar.xz", File(homeDir, ".dsh/ubuntu-rootfs"), "xz", stripTopDir = true)
+      // 自包含 proot：复制 Operit app 域定制 proot/loader 到独立目录，设 exec 位，
+      // 供 proot-entry.sh 的 fallback 分支使用（不再依赖 Termux proot，坑 38）。
+      copyAssetToFile("native/liboperit_proot.so", operitProot)
+      copyAssetToFile("native/liboperit_loader.so", operitLoader)
+      operitProot.setExecutable(true, false)
+      operitLoader.setExecutable(true, false)
       writeProotEntry(prootEntry)
       Log.i(TAG, "tool assets extracted")
     } catch (t: Throwable) {
@@ -359,7 +371,8 @@ class EngineManager(private val context: Context, private val pickToken: String?
     // 缺桌面字段，容器内 nproc/ps/CMake -j 会读 0 核或解析失败。必须先落伪造文件，
     // 再在 proot 命令行里 bind 到 /proc/{stat,loadavg,uptime,version}。
     writeFakeSysdata(entry.parentFile)
-    val prootBin = File(usrDir, "bin/proot").absolutePath
+    val prootBin = File(operitNativeDir, "proot").absolutePath
+    val loaderBin = File(operitNativeDir, "loader").absolutePath
     val script = """#!/bin/bash
 # Seagull DevStudio Ubuntu container entry (rootfs top-level)
 # 优先 root chroot（KernelSU/Magisk su 可用时）；无 root 时 fallback proot。
@@ -375,9 +388,7 @@ fi
 export PROOT_TMP_DIR="${'$'}{TMPDIR:-${'$'}HOME/tmp}"
 mkdir -p "${'$'}PROOT_TMP_DIR"
 PROOT_BIN="${'$'}{PROOT_BIN:-$prootBin}"
-U="${'$'}{PROOT_BIN%/bin/proot}"
-export PROOT_LOADER="${'$'}U/libexec/proot/loader"
-export PROOT_LOADER_32="${'$'}U/libexec/proot/loader32"
+export PROOT_LOADER="${'$'}{PROOT_LOADER:-$loaderBin}"
 # 清理 termux-exec 的 execve 拦截（会把 guest 路径改写成宿主 PREFIX 路径，导致 proot execve 失败）。
 unset LD_PRELOAD TERMUX_EXEC__EXECVE_CALL__INTERCEPT TERMUX_EXEC__SYSTEM_LINKER_EXEC__MODE TERMUX_EXEC__PROC_SELF_EXE
 exec "${'$'}PROOT_BIN" --link2symlink --kill-on-exit -0 -r "${'$'}ROOTFS_DIR" -b /dev -b /proc -b /sys -b /storage -b "${'$'}ROOTFS_DIR/proc/.stat:/proc/stat" -b "${'$'}ROOTFS_DIR/proc/.loadavg:/proc/loadavg" -b "${'$'}ROOTFS_DIR/proc/.uptime:/proc/uptime" -b "${'$'}ROOTFS_DIR/proc/.version:/proc/version" -b "${'$'}{HOME}:${'$'}{HOME}" -w "${'$'}{HOME}" /bin/bash "${'$'}@"

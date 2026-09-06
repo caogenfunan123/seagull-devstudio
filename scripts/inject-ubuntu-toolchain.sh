@@ -27,8 +27,9 @@ echo "=== [1/5] 解包 minbase rootfs ==="
 sudo tar -C "$UNPACK" -xJf "$IN_TAR"
 
 # 探测顶层目录：proot-distro tar 顶层是单目录（如 ubuntu-noble-aarch64/）；平铺则无。
-# 重打包必须保持与原资产相同的顶层结构，否则设备端 extractTarAsset(stripTopDir=true)
-# 剥完顶层后 bin/bash 落错位置，容器起不来（真机日志实锤）。
+# 重打包必须从 ROOTFS（已剥掉 distro_name 层）打包，产出单层 `.` 结构；否则
+# 设备端 extractTarAsset(stripTopDir=true) 只剥一层（`./`），distro_name 残留导致
+# bin/bash 落错位置（ubuntu-noble-aarch64/bin/bash），容器起不来（真机日志实锤）。
 ROOTFS="$UNPACK"
 cnt="$(find "$UNPACK" -mindepth 1 -maxdepth 1 | wc -l)"
 if [ "$cnt" = "1" ]; then
@@ -98,6 +99,6 @@ sudo umount "$ROOTFS/sys" 2>/dev/null || true
 sudo rm -f "$ROOTFS/tmp/init-rootfs.sh"
 
 echo "=== [5/5] 重打包（保持顶层结构）+ sha256 ==="
-sudo tar -C "$UNPACK" -cJf "$OUT_TAR" .
+sudo tar -C "$ROOTFS" -cJf "$OUT_TAR" .
 (cd "$OUT_DIR" && sha256sum "$OUT_NAME" > "${OUT_NAME}.sha256")
 echo "完成：$OUT_TAR ($(du -sh "$OUT_TAR" | cut -f1))"

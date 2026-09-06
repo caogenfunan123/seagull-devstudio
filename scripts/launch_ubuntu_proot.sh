@@ -6,7 +6,7 @@
 PREFIX="${PREFIX:-/data/data/com.dsharnessmobile.shell/files/usr}"
 HOME_DIR="${HOME:-/data/data/com.dsharnessmobile.shell/files/home}"
 UBUNTU_ROOT="${HOME_DIR}/.dsh/ubuntu-rootfs"
-PROOT_BIN="${PREFIX}/bin/proot"
+PROOT_BIN="${PREFIX}/share/operit-native/proot"
 
 if [ ! -d "${UBUNTU_ROOT}" ]; then
     echo "[Seagull Error] Ubuntu rootfs not found at ${UBUNTU_ROOT}"
@@ -32,10 +32,8 @@ fi
 # proot 默认用编译期 Termux tmp（/data/data/com.termux/...）建 glue rootfs，app 域不存在 → 必须显式指定
 export PROOT_TMP_DIR="${TMPDIR:-$HOME_DIR/tmp}"
 mkdir -p "$PROOT_TMP_DIR"
-# proot 硬编码 termux loader 路径（/data/data/com.termux/...），app 域不存在 → 用 PROOT_LOADER 覆盖
-U="${PROOT_BIN%/bin/proot}"
-export PROOT_LOADER="$U/libexec/proot/loader"
-export PROOT_LOADER_32="$U/libexec/proot/loader32"
+# 自包含 Operit proot：loader 与 proot 同目录（usr/share/operit-native），用 PROOT_LOADER 显式指定
+export PROOT_LOADER="${PROOT_LOADER:-${PREFIX}/share/operit-native/loader}"
 # 清理 termux-exec 的 execve 拦截（会把 guest 路径改写成宿主 PREFIX 路径，导致 proot execve 失败）
 unset LD_PRELOAD TERMUX_EXEC__EXECVE_CALL__INTERCEPT TERMUX_EXEC__SYSTEM_LINKER_EXEC__MODE TERMUX_EXEC__PROC_SELF_EXE
 

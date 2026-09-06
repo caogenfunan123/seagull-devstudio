@@ -104,14 +104,12 @@ fi
 # ---- proot fallback ----
 export PROOT_TMP_DIR="${TMPDIR:-$HOME/tmp}"
 mkdir -p "$PROOT_TMP_DIR"
-PROOT_BIN="${PROOT_BIN:-/data/data/com.dsharnessmobile.shell/files/usr/bin/proot}"
+PROOT_BIN="${PROOT_BIN:-/data/data/com.dsharnessmobile.shell/files/usr/share/operit-native/proot}"
 if [ ! -x "${PROOT_BIN}" ]; then
     echo "[Seagull] proot 二进制未找到: ${PROOT_BIN}" >&2
     exit 1
 fi
-U="${PROOT_BIN%/bin/proot}"
-export PROOT_LOADER="$U/libexec/proot/loader"
-export PROOT_LOADER_32="$U/libexec/proot/loader32"
+export PROOT_LOADER="${PROOT_LOADER:-/data/data/com.dsharnessmobile.shell/files/usr/share/operit-native/loader}"
 # 清理 termux-exec 的 execve 拦截（会把 guest 路径改写成宿主 PREFIX 路径，导致 proot execve 失败）。
 unset LD_PRELOAD TERMUX_EXEC__EXECVE_CALL__INTERCEPT TERMUX_EXEC__SYSTEM_LINKER_EXEC__MODE TERMUX_EXEC__PROC_SELF_EXE
 exec "${PROOT_BIN}" --link2symlink --kill-on-exit -0 \
