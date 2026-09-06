@@ -31,9 +31,10 @@ const MIRRORS = [
 // 注：termux 无 `licenses` 包（实测索引不存在）——usr/share/LICENSES 标准文本来自基座 bootstrap 或本脚本的
 // 仓库 LICENSE 复制（见 ensureLicenseTexts；x64 基座曾缺 → 架构无关确定化）。
 // Seagull fork：+ proot（Ubuntu 容器启动命根，97KB + libtalloc/libandroid-shmem 两依赖，
-// BFS 自动闭包；无它则 ubuntu-rootfs 解压了也起不来）。apktool/jadx/java 走
-// install-java-tools.sh 按需安装器（体量大不入常驻，避免快照膨胀）。
-const TARGETS = ['python', 'python-pip', 'perl', 'ruby', 'ripgrep', 'zip', 'vim', 'openssl', 'openssl-tool', 'zsh', 'socat', 'busybox', 'dpkg', 'termux-exec', 'termux-elf-cleaner', 'termux-keyring', 'android-tools', 'git', 'proot']
+// BFS 自动闭包；无它则 ubuntu-rootfs 解压了也起不来）。+ openjdk-21/apksigner/aapt2
+// 入常驻（APK 逆向/打包链开箱即用，根治「每次现场 apt 下 193MB」；apktool/jadx 走
+// assets 内置 jar 不重复入快照；zipalign 缺失：未对齐 APK 本地可装可跑，列入已知缺口）。
+const TARGETS = ['python', 'python-pip', 'perl', 'ruby', 'ripgrep', 'zip', 'vim', 'openssl', 'openssl-tool', 'zsh', 'socat', 'busybox', 'dpkg', 'termux-exec', 'termux-elf-cleaner', 'termux-keyring', 'android-tools', 'git', 'proot', 'openjdk-21', 'apksigner', 'aapt2']
 const NEW_PREFIX = '/data/user/0/com.dsharnessmobile.shell/files/usr'
 const OLD_PREFIX = '/data/data/com.termux/files/usr'
 const BASE_DIR = join(ROOT, '.deploy-tmp', ABI === 'arm64' ? 'arm64-base' : 'x64-base')

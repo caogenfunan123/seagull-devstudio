@@ -73,6 +73,24 @@ function shellQuote(s) {
 function runtimePrefix() {
   return process.env.TERMUX__PREFIX || process.env.PREFIX || '/data/data/com.dsharnessmobile.shell/files/usr';
 }
+
+/** 宿主 home 目录（app 域 files/home）。 */
+function homeDir() {
+  return process.env.HOME || runtimePrefix().replace(/\/usr\/?$/, '') + '/home';
+}
+
+/**
+ * Java 系工具统一 env：Termux openjdk 的 user.home / java.io.tmpdir 不读 HOME/TMPDIR env
+ * （编译期硬编码 Termux 路径），必须经 JAVA_TOOL_OPTIONS 显式 -D 覆盖，否则 apktool
+ * 建 framework 目录、buildResources createTempFile 均失败（坑 39）。
+ */
+function javaEnv() {
+  const home = homeDir();
+  return {
+    ...process.env,
+    JAVA_TOOL_OPTIONS: '-Duser.home=' + home + ' -Djava.io.tmpdir=' + home + '/tmp',
+  };
+}
 function usrBin(name) { return runtimePrefix() + '/bin/' + name; }
 function usrShare(name) { return runtimePrefix() + '/share/' + name; }
 
@@ -107,7 +125,7 @@ async function genKeystore({ alias = 'androiddebugkey', storePass = 'android', k
     '-dname', cn,
   ];
   try {
-    await execFileAsync(keytoolBin(), args, { timeout: 120000, maxBuffer: 16 * 1024 * 1024 });
+    await execFileAsync(keytoolBin(), args, { timeout: 120000, maxBuffer: 16 * 1024 * 1024, env: javaEnv() });
     return { ok: true, keystore: ks };
   } catch (err) {
     return { ok: false, error: 'keytool 生成 keystore 失败：' + err.message };
@@ -160,7 +178,7 @@ async function runTool(name, jarRel, args, timeout, cpMain) {
   if (t === null) return { ok: false, error: installGuide() };
   try {
     const { stdout, stderr } = await execFileAsync(t.cmd, [...t.args, ...args], {
-      timeout: timeout || 300000, maxBuffer: 64 * 1024 * 1024,
+      timeout: timeout || 300000, maxBuffer: 64 * 1024 * 1024, env: javaEnv(),
     });
     return { ok: true, stdout: (stdout || '').trim(), stderr: (stderr || '').trim() };
   } catch (err) {
@@ -292,7 +310,7 @@ function tools() {
       if (signer) {
         try {
           const { stdout } = await execFileAsync(signer.cmd, [...signer.args, 'verify', '--print-certs', apkPath], {
-            timeout: 60000, maxBuffer: 16 * 1024 * 1024,
+            timeout: 60000, maxBuffer: 16 * 1024 * 1024, env: javaEnv(),
           });
           info.signingCertificates = (stdout || '').trim();
         } catch (err) {

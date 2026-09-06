@@ -55,8 +55,7 @@ function tools() {
     parameters: {},
     output: { schema: { type: 'object', additionalProperties: true }, render: renderText },
     async execute() {
-      const { access } = await import('node:fs');
-      const { stat } = await import('node:fs/promises');
+      const { access, stat } = await import('node:fs/promises');
       const entry = ubuntuEntry();
       const rootfs = entry.replace('/proot-entry.sh', '');
       // marker = Ubuntu 关键二进制 usr/bin/bash（Ubuntu 24.04 的 bin -> usr/bin 软链），
