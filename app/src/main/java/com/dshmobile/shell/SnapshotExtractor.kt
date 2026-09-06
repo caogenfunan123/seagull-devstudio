@@ -55,21 +55,20 @@ object SnapshotExtractor {
             entry = tar.nextEntry
             continue
           }
-          // deleteIfExists does not follow links: on an overwrite re-extract an old symlink may be
-          // dangling (File.exists() follows links, returning false for dangling ones, so the stale
-          // link would survive and createSymbolicLink would throw FileAlreadyExistsException —
-          // measured on the v0.10.7 upgrade re-extract). Also safe for regular files/dirs.
-          java.nio.file.Files.deleteIfExists(target.toPath())
+          // 覆盖写前清理：旧快照的「目录」与新快照的「软链」同路径时（实测 usr/lib/terminfo、
+          // usr/lib/icu/current、node_modules/* 在快照重建中从目录改为软链），deleteIfExists 对
+          // 非空目录抛 DirectoryNotEmptyException → 升级重解压整体失败、指纹永远更新不了。
+          // deleteForOverwrite 递归删非空目录，文件/dangling 软链直接删（不跟随软链）。
+          deleteForOverwrite(target)
           java.nio.file.Files.createSymbolicLink(target.toPath(), java.nio.file.Paths.get(entry.linkName))
         }
         else -> {
           target.parentFile?.mkdirs()
           // Overwrite-safety: a previous extraction can leave a read-only regular file
           // (measured: termux-am/am.apk with 0400 on some emulator ROMs — FileOutputStream
-          // would fail EACCES on the upgrade re-extract). deleteIfExists does not follow
-          // links, so stale/dangling files are cleared before the new copy is written,
-          // mirroring the symlink branch above.
-          java.nio.file.Files.deleteIfExists(target.toPath())
+          // would fail EACCES on the upgrade re-extract), or a directory where the new
+          // snapshot has a regular file (same conflict class as the symlink branch above).
+          deleteForOverwrite(target)
           target.outputStream().use { out ->
             val buf = ByteArray(64 * 1024)
             var n = tar.read(buf)
@@ -104,6 +103,23 @@ object SnapshotExtractor {
       if (parentCanon.startsWith(destCanon + File.separator) || parentCanon == destCanon) target else null
     } catch (_: Exception) {
       null
+    }
+  }
+
+  /**
+   * 覆盖写前清理：deleteIfExists 无法删非空目录（DirectoryNotEmptyException），而升级重解压时
+   * 旧快照的「目录」与新快照的「软链/文件」同路径会冲突（实测 usr/lib/terminfo、icu/current、
+   * node_modules/*）。软链/文件直接删（不跟随）；真实目录逆序递归删。
+   */
+  private fun deleteForOverwrite(target: File) {
+    val p = target.toPath()
+    if (java.nio.file.Files.isSymbolicLink(p) || !java.nio.file.Files.isDirectory(p)) {
+      java.nio.file.Files.deleteIfExists(p)
+    } else {
+      java.nio.file.Files.walk(p).use { stream ->
+        stream.sorted { a, b -> b.compareTo(a) }
+          .forEach { java.nio.file.Files.deleteIfExists(it) }
+      }
     }
   }
 
