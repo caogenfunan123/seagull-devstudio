@@ -56,7 +56,7 @@ object SnapshotExtractor {
             continue
           }
           // 覆盖写前清理：旧快照的「目录」与新快照的「软链」同路径时（实测 usr/lib/terminfo、
-          // usr/lib/icu/current、node_modules/* 在快照重建中从目录改为软链），deleteIfExists 对
+          // usr/lib/icu/current、node_modules 下条目在快照重建中从目录改为软链），deleteIfExists 对
           // 非空目录抛 DirectoryNotEmptyException → 升级重解压整体失败、指纹永远更新不了。
           // deleteForOverwrite 递归删非空目录，文件/dangling 软链直接删（不跟随软链）。
           deleteForOverwrite(target)
@@ -109,7 +109,7 @@ object SnapshotExtractor {
   /**
    * 覆盖写前清理：deleteIfExists 无法删非空目录（DirectoryNotEmptyException），而升级重解压时
    * 旧快照的「目录」与新快照的「软链/文件」同路径会冲突（实测 usr/lib/terminfo、icu/current、
-   * node_modules/*）。软链/文件直接删（不跟随）；真实目录逆序递归删。
+   * node_modules 下条目）。软链/文件直接删（不跟随）；真实目录逆序递归删。
    */
   private fun deleteForOverwrite(target: File) {
     val p = target.toPath()
