@@ -182,6 +182,10 @@ async function runTool(name, jarRel, args, timeout, cpMain) {
     });
     return { ok: true, stdout: (stdout || '').trim(), stderr: (stderr || '').trim() };
   } catch (err) {
+    // jadx 在遇部分非致命资源/类解析警告时退出码为 3（或 2），但源码依然完整解出，不应判死
+    if (name === 'jadx' && (err.code === 3 || err.code === 2)) {
+      return { ok: true, stdout: String(err.stdout || '').trim(), stderr: String(err.stderr || '').trim(), warning: 'jadx finished with non-fatal errors' };
+    }
     return { ok: false, error: err.message, stderr: err.stderr ? String(err.stderr).trim() : '' };
   }
 }
