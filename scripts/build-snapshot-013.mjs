@@ -10,7 +10,7 @@
 //
 // 用法：node scripts/build-snapshot-013.mjs <arm64|x86_64>   （基座缺省 .deploy-tmp/{arm64,x64}-base/base-usr.tar.xz）
 import { execSync } from 'node:child_process'
-import { mkdirSync, existsSync, writeFileSync, readFileSync, readdirSync, rmSync, statSync, renameSync, copyFileSync } from 'node:fs'
+import { mkdirSync, existsSync, writeFileSync, readFileSync, readdirSync, rmSync, statSync, renameSync, copyFileSync, unlinkSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createHash } from 'node:crypto'
@@ -508,8 +508,12 @@ for (const d of ['var/cache/apt/archives/partial', 'var/lib/apt/lists/partial', 
       const link = join(trustedDir, f)
       const entity = join(keyringDir, f)
       if (existsSync(entity) && !existsSync(link)) {
-        rmSync(link, { force: true })
-        copyFileSync(entity, link)
+        // 悬空软链必须用 unlinkSync 删（作用于链接 inode 本身、不跟随目标）。
+        // rmSync({force:true}) 在 node24+overlayfs 上对悬空软链不真正删除（force 吞掉
+        // 跟随失败），残留的链接会让后续写入跟随到不存在的旧前缀目标 → ENOENT。
+        try { rmSync(link, { force: true }) } catch { /* ignore */ }
+        try { unlinkSync(link) } catch (e) { if (e.code !== 'ENOENT') throw e }
+        writeFileSync(link, readFileSync(entity))
         fixed++
       }
     }
