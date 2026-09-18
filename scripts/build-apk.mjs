@@ -112,6 +112,8 @@ try {
   const sha = createHash('sha256').update(readFileSync(snapIn)).digest('hex')
   writeFileSync(join(apkDir, 'app', 'src', 'main', 'assets', 'snapshot.sha256'), sha, 'ascii')
   log(`snapshot.sha256 = ${sha}`)
+  log('生成资产清单（asset-manifest.json，防坏校验）…')
+  run('node', [join(ROOT, 'scripts', 'gen-asset-manifest.mjs'), join(apkDir, 'app', 'src', 'main', 'assets')])
 
   // ---- 5. gradle assembleDebug（跨平台 gradlew）----
   log('构建 APK…')

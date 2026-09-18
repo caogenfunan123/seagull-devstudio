@@ -21,6 +21,17 @@ function renderText(_a, v) {
   return [{ type: 'text', text: typeof v === 'string' ? v : JSON.stringify(v) }];
 }
 
+/** 单引号包裹防命令注入（对齐 root-ops/apk-tools 的 shellQuote 语义）。 */
+function shQuote(s) {
+  return "'" + String(s).replace(/'/g, "'\\''") + "'";
+}
+
+/** apt 输出可能很长，只保留尾部（错误摘要通常在末尾），封顶 8KB。 */
+function tailOut(s) {
+  const t = (s || '').trim();
+  return t.length > 8192 ? t.slice(-8192) : t;
+}
+
 function tools() {
   const execTool = defineTool({
     name: 'ubuntu_exec',
@@ -72,7 +83,55 @@ function tools() {
     },
   });
 
-  return [execTool, statusTool];
+  const toolchainTool = defineTool({
+    name: 'ubuntu_toolchain_install',
+    description:
+      'Install the compile toolchain (build-essential/gcc/g++/make/cmake/git/python3) inside the ' +
+      'Seagull Ubuntu container via apt. The APK now ships a slim minbase rootfs (no toolchain baked ' +
+      'in) to keep it light-asset; call this once after ubuntu_status confirms the rootfs is present. ' +
+      'Requires root chroot (KernelSU) for a reliable apt/dpkg run — without root, dpkg hits the ' +
+      'SYSCONFDIR sandbox limitation (坑13) and the install may partially fail; the tool reports this honestly.',
+    parameters: {
+      packages: { type: 'string', description: 'Optional space-separated extra apt packages to install. Defaults to "build-essential cmake git python3".' },
+      timeoutMs: { type: 'number', description: 'Timeout in ms (default 900000).' },
+    },
+    output: { schema: { type: 'object', additionalProperties: true }, render: renderText },
+    async execute({ packages, timeoutMs = 900000 }) {
+      const entry = ubuntuEntry();
+      // 白名单字符闸（apt 包名字符集：字母数字 + . + _ + -），非法项丢弃；再逐个单引号包裹——双保险防注入。
+      const extra = String(packages || '').trim().split(/\s+/).filter((p) => /^[A-Za-z0-9._+-]+$/.test(p)).map((p) => shQuote(p)).join(' ')
+        || 'build-essential cmake git python3';
+      const pkgs = extra;
+      // 探测 root 通道：/system/bin/su 可执行 = proot-entry.sh 会走 root chroot（apt 可靠）；
+      // 否则纯 proot，dpkg 触发 SYSCONFDIR 限制（坑13），如实降级报告。
+      let hasRoot = false;
+      try {
+        const { accessSync, constants } = await import('node:fs');
+        accessSync('/system/bin/su', constants.X_OK);
+        hasRoot = true;
+      } catch { hasRoot = false; }
+      const script =
+        'set -e; export DEBIAN_FRONTEND=noninteractive; ' +
+        '[ -s /etc/apt/sources.list ] || printf "deb http://ports.ubuntu.com/ubuntu-ports noble main universe\\n" > /etc/apt/sources.list; ' +
+        'apt-get update -y && apt-get install -y --no-install-recommends ' + pkgs + ' && apt-get clean';
+      if (!hasRoot) {
+        return {
+          ok: false, rootRequired: true,
+          error: '未检测到 root 通道（/system/bin/su 不可执行）：纯 proot 下 apt/dpkg 会触发 SYSCONFDIR 沙箱限制（坑13），无法可靠安装工具链。请在已 root 的设备上重试，或改用宿主 Termux 的按需安装器。',
+        };
+      }
+      try {
+        const { stdout, stderr } = await execFileAsync('bash', [entry, '-lc', script], {
+          timeout: timeoutMs, maxBuffer: 32 * 1024 * 1024,
+        });
+        return { ok: true, root: true, packages: pkgs.trim(), stdout: tailOut(stdout), stderr: (stderr || '').trim() };
+      } catch (err) {
+        return { ok: false, root: true, error: err.message, stderr: tailOut(err.stderr ? String(err.stderr) : '') };
+      }
+    },
+  });
+
+  return [execTool, statusTool, toolchainTool];
 }
 
 // C 方案：显式声明 tools 硬依赖（对齐 bridge/manage），修复 ctx.get('tools') 静默 undefined。

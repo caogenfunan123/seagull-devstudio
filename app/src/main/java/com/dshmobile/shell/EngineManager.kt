@@ -176,11 +176,12 @@ class EngineManager(private val context: Context, private val pickToken: String?
    *
    * Layout mirrors tool-installer's registry install paths:
    *   assets/tools/apktool.jar       -> files/usr/share/apktool/apktool.jar
-   *   assets/tools/jadx.zip          -> files/usr/share/jadx/
-   *   assets/tools/radare2.tar.xz    -> files/usr/share/radare2/
-   *   assets/tools/rizin.tar.gz      -> files/usr/share/rizin/
+   *   assets/native/liboperit_*.so   -> files/usr/share/operit-native/{proot,loader}
    *   assets/ubuntu-rootfs.tar.xz    -> files/home/.dsh/ubuntu-rootfs/
    *                                    + proot-entry.sh (plugin entry point)
+   *
+   * 轻资产化（2026-09-18 P2）：jadx/radare2/rizin 不再随包解压，改 tool-installer 在线安装。
+   * 防坏（P1）：见 extractToolAssetsLocked 的 manifest 核验 + staging + stamp 路径。
    *
    * Optional: a missing asset is skipped; a failure logs and does not block
    * engine startup. Runs after snapshot extraction (first launch + refresh).
@@ -195,9 +196,72 @@ class EngineManager(private val context: Context, private val pickToken: String?
   }
 
   private fun extractToolAssetsLocked(): Boolean {
-    // 幂等：已解压过（apktool.jar + proot-entry.sh + rootfs 关键 bin/bash 都在）则跳过——
-    // startEngine 每次都会调本方法，不能每次全量重解压 200MB+；
-    // rootfs 的 bin/bash 是容器可启动的最硬落点，缺失则视为解压不完整需重解。
+    // 防坏重构（2026-09-18，对齐 DSHA「构建期锁哈希 + 落地后核验 + 原子写」范式）：
+    // 旧实现以「5 个文件 exists()」判完成——解压中断/半份落地后永久定格为成功（工具装好即坏
+    // 的根因）。新实现：全部落到 staging 目录 → asset-manifest.json 逐项核验 → 原子 rename
+    // 进位 → 成功才写 stamp。stamp = 清单哈希 + 资产哈希 + APK identity（path:len:mtime，
+    // 覆盖安装必变）。任何一步失败 → 清 staging、不写 stamp → 下次启动重解，绝不半份定格。
+    val manifest = loadAssetManifest()
+    if (manifest == null) {
+      // 清单缺失 = 未经 build-apk.mjs 的裸构建（本地直跑 gradle）：保持旧式 exists 判定，
+      // 不阻塞开发迭代；CI/正式包永远有清单（gen-asset-manifest 在 gradle 前强制生成）。
+      return extractToolAssetsLegacy()
+    }
+    if (!hasAsset("tools/apktool.jar") && !hasAsset("native/liboperit_proot.so") &&
+        !hasAsset("native/liboperit_loader.so") && !hasAsset("ubuntu-rootfs.tar.xz")) {
+      // APK 不含任何工具资产（协调库本地构建形态）：无事可做直接成功——若继续走
+      // staging 流程，锚点核验会对着「永远不可能在场」的落点失败 → 每启动重解不收敛。
+      return true
+    }
+    // 幂等锚点必须「按资产在场」推导：清单在但个别资产缺（协调库本地构建只少 rootfs 等）时，
+    // 硬编码全量锚点会永不满足 → stamp 匹配也每启动重解（永不收敛的重解风暴）。
+    val stampFile = File(context.filesDir, ".toolassets-stamp")
+    val stamp = toolAssetsStamp(manifest)
+    val anchors = ArrayList<File>()
+    if (hasAsset("tools/apktool.jar")) anchors.add(File(usrDir, "share/apktool/apktool.jar"))
+    if (hasAsset("native/liboperit_proot.so")) anchors.add(File(operitNativeDir, "proot"))
+    if (hasAsset("native/liboperit_loader.so")) anchors.add(File(operitNativeDir, "loader"))
+    if (hasAsset("ubuntu-rootfs.tar.xz")) {
+      anchors.add(File(homeDir, ".dsh/ubuntu-rootfs/proot-entry.sh"))
+      anchors.add(File(homeDir, ".dsh/ubuntu-rootfs/bin/bash"))
+    }
+    if (stampFile.exists() && stampFile.readText().trim() == stamp && anchors.all { it.exists() }) {
+      return true
+    }
+    val staging = File(context.filesDir, ".toolassets-staging")
+    return try {
+      staging.deleteRecursively()
+      staging.mkdirs()
+      val stUsr = File(staging, "usr")
+      val stHome = File(staging, "home")
+      val stNative = File(stUsr, "share/operit-native")
+      val stRootfs = File(stHome, ".dsh/ubuntu-rootfs")
+      // 1) staging 落地（旧实现中 radare2/rizin/jadx 已改在线安装，不再随包解压）。
+      copyAssetToStaged("tools/apktool.jar", File(stUsr, "share/apktool/apktool.jar"))
+      copyAssetToStaged("native/liboperit_proot.so", File(stNative, "proot")).setExecutable(true, false)
+      copyAssetToStaged("native/liboperit_loader.so", File(stNative, "loader")).setExecutable(true, false)
+      extractTarAsset("ubuntu-rootfs.tar.xz", stRootfs, "xz", stripTopDir = true)
+      writeProotEntry(File(stRootfs, "proot-entry.sh"))
+      // 2) 核验：资产本体哈希（逐字节 copy 项）+ rootfs 抽检成员/统计（防解一半）。
+      verifyAssetHashes(manifest, staging)
+      verifyRootfs(manifest, stRootfs)
+      // 3) 进位：逐路径递归合并（staging 树 → usr/home，引擎树与用户数据分毫不动）。
+      promoteTree(stUsr, usrDir)
+      promoteTree(stHome, homeDir)
+      staging.deleteRecursively()
+      // 4) 成功才盖章——失败/中断的路径永远不写 stamp。
+      stampFile.writeText(stamp + "\n")
+      Log.i(TAG, "tool assets extracted & verified (stamp " + stamp.take(12) + ")")
+      true
+    } catch (t: Throwable) {
+      Log.e(TAG, "tool asset extract failed (non-fatal; staging discarded, retry next start)", t)
+      try { staging.deleteRecursively() } catch (_: Throwable) {}
+      false
+    }
+  }
+
+  /** 旧式无清单路径（本地裸构建/开发包）：保持 exists 判定语义，不做核验。 */
+  private fun extractToolAssetsLegacy(): Boolean {
     val apkJar = File(usrDir, "share/apktool/apktool.jar")
     val prootEntry = File(homeDir, ".dsh/ubuntu-rootfs/proot-entry.sh")
     val rootfsBash = File(homeDir, ".dsh/ubuntu-rootfs/bin/bash")
@@ -207,29 +271,180 @@ class EngineManager(private val context: Context, private val pickToken: String?
         operitProot.exists() && operitLoader.exists()) {
       return true
     }
-    var ok = true
-    try {
+    return try {
       copyAssetToFile("tools/apktool.jar", apkJar)
-      extractTarAsset("tools/radare2.tar.gz", File(usrDir, "share/radare2"), "gz", stripComponents = 4)
-      extractTarAsset("tools/rizin.tar.gz", File(usrDir, "share/rizin"), "gz", stripComponents = 3)
-      extractZipAsset("tools/jadx.zip", File(usrDir, "share/jadx"))
-      // proot-distro rootfs：tar 顶层是单目录（如 ubuntu-noble-aarch64/）——剥离，
-      // 否则 bin/bash 落在 .../ubuntu-noble-aarch64/bin/bash，proot-entry 的 ROOTFS_DIR
-      // 指向 .dsh/ubuntu-rootfs 时找不到 /bin/bash，容器必挂（真机日志实锤）。
-      extractTarAsset("ubuntu-rootfs.tar.xz", File(homeDir, ".dsh/ubuntu-rootfs"), "xz", stripTopDir = true)
-      // 自包含 proot：复制 Operit app 域定制 proot/loader 到独立目录，设 exec 位，
-      // 供 proot-entry.sh 的 fallback 分支使用（不再依赖 Termux proot，坑 38）。
       copyAssetToFile("native/liboperit_proot.so", operitProot)
       copyAssetToFile("native/liboperit_loader.so", operitLoader)
       operitProot.setExecutable(true, false)
       operitLoader.setExecutable(true, false)
+      extractTarAsset("ubuntu-rootfs.tar.xz", File(homeDir, ".dsh/ubuntu-rootfs"), "xz", stripTopDir = true)
       writeProotEntry(prootEntry)
-      Log.i(TAG, "tool assets extracted")
+      Log.i(TAG, "tool assets extracted (legacy, no manifest)")
+      true
     } catch (t: Throwable) {
       Log.e(TAG, "tool asset extract failed (non-fatal)", t)
-      ok = false
+      false
     }
-    return ok
+  }
+
+  /** asset-manifest.json（build-apk.mjs 打包前由 gen-asset-manifest.mjs 生成）。 */
+  private class AssetManifest(
+    val sha256: String,
+    val assets: Map<String, String>,
+    val probes: Map<String, String>,
+    val rootfsMembers: Int,
+    val rootfsFileBytes: Long,
+  )
+
+  private fun loadAssetManifest(): AssetManifest? = try {
+    val text = context.assets.open("asset-manifest.json").bufferedReader().use { it.readText() }
+    val json = org.json.JSONObject(text)
+    val assets = LinkedHashMap<String, String>()
+    val a = json.getJSONObject("assets")
+    for (k in a.keys()) assets[k] = a.getString(k)
+    val probes = LinkedHashMap<String, String>()
+    val p = json.getJSONObject("probes")
+    for (k in p.keys()) probes[k] = p.getString(k)
+    val stats = json.getJSONObject("rootfsStats").optJSONObject("ubuntu-rootfs.tar.xz")
+    AssetManifest(
+      sha256 = sha256Of(text.toByteArray(Charsets.UTF_8)),
+      assets = assets,
+      probes = probes,
+      rootfsMembers = stats?.optInt("members", -1) ?: -1,
+      rootfsFileBytes = stats?.optLong("fileBytes", -1L) ?: -1L,
+    )
+  } catch (_: Throwable) {
+    null
+  }
+
+  /** stamp = 清单哈希 + 资产本体哈希聚合 + APK identity。path:len:mtime 换包必变（DSHA 同款）。 */
+  private fun toolAssetsStamp(m: AssetManifest): String {
+    val agg = createHash()
+    agg.update(m.sha256.toByteArray(Charsets.UTF_8))
+    m.assets.toSortedMap().forEach { (k, v) -> agg.update((k + v).toByteArray(Charsets.UTF_8)) }
+    val apk = File(context.applicationInfo.sourceDir)
+    val identity = apk.path + ":" + apk.length() + ":" + apk.lastModified()
+    agg.update(identity.toByteArray(Charsets.UTF_8))
+    return hexOf(agg.digest())
+  }
+
+  /** 核验 staging 内逐字节 copy 的资产本体哈希。清单有项 = 打包时资产必在场 → 落点缺失/篡改都必须抛：
+   *  若放过缺失项，stamp 照写但幂等锚点检查永远失败 → 每次启动全量重解（永不收敛的重解风暴）。 */
+  private fun verifyAssetHashes(m: AssetManifest, staging: File) {
+    for ((asset, expected) in m.assets) {
+      val dest = when {
+        asset == "tools/apktool.jar" -> File(staging, "usr/share/apktool/apktool.jar")
+        asset == "native/liboperit_proot.so" -> File(staging, "usr/share/operit-native/proot")
+        asset == "native/liboperit_loader.so" -> File(staging, "usr/share/operit-native/loader")
+        else -> continue // 在线装类（jadx/r2/rizin 旧清单可能仍有项）无逐字节落点
+      }
+      if (!dest.exists()) throw java.io.IOException("asset missing after extract: " + asset)
+      if (sha256File(dest) != expected) {
+        throw java.io.IOException("asset hash mismatch: " + asset)
+      }
+    }
+  }
+
+  /** rootfs 落点核验：成员数/文件字节对账 + 抽检成员哈希（软链成员=链接目标串哈希）。 */
+  private fun verifyRootfs(m: AssetManifest, rootfsDir: File) {
+    if (m.rootfsMembers < 0 && m.probes.isEmpty()) return // 清单无 rootfs 数据（轻资产外构建）
+    var files = 0L
+    var bytes = 0L
+    rootfsDir.walkTopDown().forEach { f ->
+      if (f == rootfsDir) return@forEach
+      files++
+      if (f.isFile && !java.nio.file.Files.isSymbolicLink(f.toPath())) bytes += f.length()
+    }
+    // 成员数与字节均为「不足即失败」下界判定：解一半时数量级差距 << 清单；壳侧额外落地
+    // （proot-entry.sh + fake-sysdata 共 5 个常规文件）只会抬高计数，故不能用相等判定。
+    if (m.rootfsMembers in 0..Int.MAX_VALUE && files < m.rootfsMembers) {
+      throw java.io.IOException("rootfs incomplete: entries " + files + " < manifest " + m.rootfsMembers)
+    }
+    if (m.rootfsFileBytes > 0 && bytes < m.rootfsFileBytes) {
+      throw java.io.IOException("rootfs bytes incomplete: " + bytes + " < manifest " + m.rootfsFileBytes)
+    }
+    for ((path, expected) in m.probes) {
+      val f = File(rootfsDir, path)
+      if (!f.exists()) throw java.io.IOException("rootfs probe missing: " + path)
+      val got = if (java.nio.file.Files.isSymbolicLink(f.toPath())) {
+        sha256Of(java.nio.file.Files.readSymbolicLink(f.toPath()).toString().toByteArray(Charsets.UTF_8))
+      } else {
+        sha256File(f)
+      }
+      if (got != expected) throw java.io.IOException("rootfs probe hash mismatch: " + path)
+    }
+  }
+
+  /**
+   * 进位：把 staging 子树合并进目标树。**逐路径递归**——只替换 staging 里真实存在的落点，
+   * 绝不整目录顶替（usr/share、home/.dsh 下有快照引擎树与用户数据，删了就是灾难）。
+   * 目录：双方存在 → 递归合并；仅 staging 有 → rename（跨卷失败退 verified copy）。
+   * 文件/软链：deleteForOverwrite 旧落点 → rename。
+   */
+  private fun promoteTree(from: File, to: File) {
+    to.mkdirs()
+    from.listFiles()?.forEach { child ->
+      val target = File(to, child.name)
+      val childIsDir = child.isDirectory && !java.nio.file.Files.isSymbolicLink(child.toPath())
+      if (childIsDir) {
+        if (target.exists() && !target.isDirectory) {
+          deleteForOverwrite(target)
+          if (!child.renameTo(target)) throw java.io.IOException("promote failed: " + target.absolutePath)
+        } else {
+          promoteTree(child, target)
+          child.delete() // 合并后 staging 空目录收尾（失败无害）
+        }
+      } else {
+        deleteForOverwrite(target)
+        if (!child.renameTo(target)) {
+          copyTreeVerified(child, target)
+          child.delete()
+        }
+      }
+    }
+  }
+
+  /** 覆盖写清理（与 SnapshotExtractor 同语义）：软链/文件直删不跟随；非空目录递归删。 */
+  private fun deleteForOverwrite(target: File) {
+    if (!target.exists() && !java.nio.file.Files.isSymbolicLink(target.toPath())) return
+    try {
+      if (java.nio.file.Files.isDirectory(target.toPath(), java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
+        target.walkBottomUp().forEach { it.delete() }
+      } else {
+        java.nio.file.Files.deleteIfExists(target.toPath())
+      }
+    } catch (t: Throwable) {
+      Log.w(TAG, "deleteForOverwrite failed: " + target.absolutePath, t)
+    }
+  }
+
+  /** copy 资产到 staging（原子：写 .part 再 rename；不跟随旧目标）。 */
+  private fun copyAssetToStaged(asset: String, dest: File): File {
+    if (!hasAsset(asset)) return dest
+    dest.parentFile?.mkdirs()
+    val staged = File(dest.parentFile, dest.name + ".part")
+    context.assets.open(asset).use { input -> staged.outputStream().use { input.copyTo(it) } }
+    java.nio.file.Files.deleteIfExists(dest.toPath())
+    if (!staged.renameTo(dest)) throw java.io.IOException("staged rename failed: " + dest.absolutePath)
+    return dest
+  }
+
+  private fun createHash(): java.security.MessageDigest =
+    java.security.MessageDigest.getInstance("SHA-256")
+
+  private fun hexOf(bytes: ByteArray): String =
+    bytes.joinToString("") { String.format(java.util.Locale.ROOT, "%02x", it) }
+
+  private fun sha256Of(data: ByteArray): String = hexOf(createHash().digest(data))
+
+  private fun sha256File(f: File): String {
+    val d = createHash()
+    f.inputStream().use { input ->
+      val buf = ByteArray(64 * 1024)
+      var n = input.read(buf)
+      while (n >= 0) { d.update(buf, 0, n); n = input.read(buf) }
+    }
+    return hexOf(d.digest())
   }
 
   /** Copy a single asset (jar etc.) to dest, overwriting, skipping if absent. */
@@ -335,33 +550,6 @@ class EngineManager(private val context: Context, private val pickToken: String?
     } catch (_: Exception) {
       null
     }
-  }
-
-  /** Extract a zip asset (jadx) into dest, zip-slip safe. */
-  private fun extractZipAsset(asset: String, dest: File) {
-    if (!hasAsset(asset)) return
-    dest.mkdirs()
-    val destCanon = dest.canonicalPath
-    context.assets.open(asset).use { input ->
-      val zip = org.apache.commons.compress.archivers.zip.ZipArchiveInputStream(input)
-      var e = zip.nextEntry
-      while (e != null) {
-        if (!e.isDirectory) {
-          val target = File(dest, e.name).canonicalFile
-          if (target.canonicalPath.startsWith(destCanon + File.separator)) {
-            target.parentFile?.mkdirs()
-            java.nio.file.Files.deleteIfExists(target.toPath())
-            target.outputStream().use { out ->
-              val buf = ByteArray(64 * 1024)
-              var n = zip.read(buf)
-              while (n >= 0) { out.write(buf, 0, n); n = zip.read(buf) }
-            }
-          }
-        }
-        e = zip.nextEntry
-      }
-    }
-    Log.i(TAG, "tool asset: $asset -> " + dest.absolutePath)
   }
 
   /** Write the proot-entry.sh launcher the dev-tools plugin (ubuntu_exec) invokes. */
