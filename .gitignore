@@ -7,6 +7,9 @@ app/src/main/assets/snapshot.tar.xz
 # Seagull fork: 大体积资产超 GitHub 100MB push 限制，不入库；CI 构建时下载到同路径
 app/src/main/assets/ubuntu-rootfs.tar.xz
 app/src/main/assets/tools/
+# 资产清单钉的是「下载资产」的哈希（资产本身不入库）——入库必陈旧，且让本地裸构建
+# 误入核验路径（资产缺 → 校验必失败）；build-apk.mjs gradle 前实时生成（gen-asset-manifest.mjs）
+app/src/main/assets/asset-manifest.json
 # 敏感数据（安全审计 2026-08-14）
 *.credentials.yaml
 token*

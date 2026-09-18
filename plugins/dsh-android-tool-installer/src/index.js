@@ -1,6 +1,7 @@
 /**
  * @dsh-android/dsh-android-tool-installer - three-tier tool registry & on-demand install.
- * L1 built-in (apktool/jadx, auto) / L2 user opt-in (radare2/rizin).
+ * 轻资产语义（2026-09-18 P2）：apktool 随包（tier L1 / install built-in）；
+ * jadx/radare2/rizin 不再入 APK，在线安装为主（install online，sha256 内置校验 + 镜像链）。
  * Provides toolInstaller service + tool_install / tool_list model tools.
  *
  * C 方案修复 (2026-09-01)：对齐 dsh-android-bridge 成功模式——
@@ -25,38 +26,39 @@ const USR = runtimePrefix();
 
 const TOOL_REGISTRY = {
   apktool: {
-    tier: 'L1', type: 'java-jar', install: 'auto',
+    tier: 'L1', type: 'java-jar', install: 'built-in',
     source: 'https://bitbucket.org/iBotPeaches/apktool/downloads/apktool_2.9.3.jar',
     installPath: join(USR, 'share', 'apktool', 'apktool.jar'),
     sha256: '7956eb04194300ce0d0a84ad18771eebc94b89fb8d1ddcce8ea4c056818646f4',
-    description: 'APK decompile & rebuild (jar)',
+    description: 'APK decompile & rebuild (jar) — 随 APK 内置，已自动解压',
   },
   jadx: {
-    tier: 'L1', type: 'archive-zip', install: 'auto',
+    tier: 'L1', type: 'archive-zip', install: 'online',
+    // 轻资产化（2026-09-18 P2）：jadx（105M）移出 APK，改在线装（sha256 内置校验 + 镜像链）。
     source: 'https://github.com/skylot/jadx/releases/download/v1.5.0/jadx-1.5.0.zip',
     installPath: join(USR, 'share', 'jadx'),
     sha256: 'c5a713fa4800cbb9e6df85ced1bef95ba329040c95cb87d54465f108483e4ef9',
-    description: 'DEX to Java decompiler (zip)',
+    description: 'DEX to Java decompiler (zip) — 需在线安装（tool_install jadx）',
   },
   radare2: {
-    tier: 'L2', type: 'native', install: 'user-opt-in',
+    tier: 'L2', type: 'native', install: 'online',
     // 官方 Android aarch64 预编译（此前错用源码 tar.xz，装了只是份源码跑不起来）。
     // tar 顶层带 data/data/org.radare.radare2installer/radare2/ 前缀（4 层），解压需剥离。
     source: 'https://github.com/radareorg/radare2/releases/download/5.9.8/radare2-5.9.8-android-aarch64.tar.gz',
     installPath: join(USR, 'share', 'radare2'),
     stripComponents: 4,
     sha256: '28b07bbcf345fbb4a59a90e9a8c4dade6196a810c33f88516f11c4ae4cb12a47',
-    description: 'Reverse engineering framework (CLI)',
+    description: 'Reverse engineering framework (CLI) — 需在线安装',
   },
   rizin: {
-    tier: 'L2', type: 'native', install: 'user-opt-in',
+    tier: 'L2', type: 'native', install: 'online',
     // 官方资产名 rizin-v0.7.4-android-aarch64.tar.gz（arm64 原生安卓版）。
     // tar 顶层带 data/data/org.rizinorg.rizininstaller/ 前缀（3 层），解压需剥离。
     source: 'https://github.com/rizinorg/rizin/releases/download/v0.7.4/rizin-v0.7.4-android-aarch64.tar.gz',
     installPath: join(USR, 'share', 'rizin'),
     stripComponents: 3,
     sha256: 'ff9919dfbaf23d84e7199b7a5f9f6f0a7643a5fcf0741998d503859d4b0e69a1',
-    description: 'Modern reverse engineering framework. 官方 android 资产为非 PIE 静态 ELF，Android 8+ 需经 root 通道（root_exec）执行',
+    description: 'Modern reverse engineering framework. 需在线安装。官方 android 资产为非 PIE 静态 ELF，Android 8+ 需经 root 通道（root_exec）执行',
     rootRequired: true,
   },
 };
@@ -84,6 +86,42 @@ function downloadFile(url, dest, onProgress) {
       file.on('finish', () => file.close(() => resolve(dest)));
     }).on('error', (err) => { file.close(); reject(err); });
   });
+}
+
+/**
+ * 镜像候选链（2026-09-18 国内加速，对齐 build-snapshot 的 npmjs→npmmirror 双镜像思路）：
+ * 直连优先 → ghfast.top 前缀代理 → 可经 DSH_MIRROR_PREFIX env 覆盖/追加（逗号分隔，公益镜像无 SLA）。
+ * 仅对 github.com/releases 资产生效（bitbucket 等前缀代理不支持）。
+ * **sha256 期望值永远来自内置 TOOL_REGISTRY，绝不跟下载源走**——镜像被投毒即校验拒收。
+ */
+function candidateUrls(url) {
+  const out = [url];
+  if (/^https:\/\/(github\.com|objects\.githubusercontent\.com|codeload\.github\.com)\//.test(url)) {
+    const prefixes = (process.env.DSH_MIRROR_PREFIX || 'https://ghfast.top/')
+      .split(',').map((s) => s.trim()).filter(Boolean);
+    for (const p of prefixes) {
+      const joined = p.endsWith('/') ? p + url : p + '/' + url;
+      if (joined !== url) out.push(joined);
+    }
+  }
+  return out;
+}
+
+/** 按候选链依次尝试下载；全部失败抛最后一个错误。 */
+async function downloadWithMirrors(url, dest, onProgress) {
+  const urls = candidateUrls(url);
+  let lastErr;
+  for (let i = 0; i < urls.length; i++) {
+    try {
+      if (i > 0) onProgress && onProgress(0, null); // 切镜像时复位进度显示
+      await downloadFile(urls[i], dest, onProgress);
+      return urls[i];
+    } catch (err) {
+      lastErr = err;
+      try { const { unlinkSync } = await import('node:fs'); unlinkSync(dest); } catch {}
+    }
+  }
+  throw new Error('所有下载源失败（' + urls.length + ' 个候选）：' + (lastErr && lastErr.message));
 }
 
 /** 计算文件 sha256（流式，大文件不爆内存）。 */
@@ -167,7 +205,7 @@ function buildService() {
       const dl = info.installPath + '.download';
       beginTask(name);
       try {
-        await downloadFile(info.source, dl, (received, total) => setProgress(received, total));
+        await downloadWithMirrors(info.source, dl, (received, total) => setProgress(received, total));
         if (info.sha256 && !info.sha256.startsWith('__')) {
           setPhase('verifying');
           const got = await sha256File(dl);
@@ -205,7 +243,7 @@ function buildService() {
 function tools(service) {
   const installTool = defineTool({
     name: 'tool_install',
-    description: 'Install a development tool from the three-tier registry (apktool, jadx, radare2, rizin).',
+    description: 'Install a development tool from the registry. apktool is built-in; jadx/radare2/rizin are online-install (download + sha256 verify + extract).',
     parameters: {
       name: { type: 'string', required: true, description: 'Tool name to install.' },
       force: { type: 'boolean', description: 'Reinstall over the existing tool (delete then re-download).' },

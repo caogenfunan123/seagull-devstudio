@@ -120,22 +120,17 @@ jobs:
           set -e
           if [ "${{ matrix.abi }}" = "arm64" ]; then
             mkdir -p app/src/main/assets/tools
-            # 内置 APK 工具（L1/L2，来源均为官方 Release）
+            # 轻资产化（2026-09-18 P2）：仅保留 apktool（22M，使用频度高）随包；
+            # jadx/radare2/rizin（合计 ~152M）改 tool-installer 在线安装（在线为主，sha256 内置校验）。
             curl -sL -o app/src/main/assets/tools/apktool.jar \
               "https://bitbucket.org/iBotPeaches/apktool/downloads/apktool_2.9.3.jar"
-            curl -sL -o app/src/main/assets/tools/jadx.zip \
-              "https://github.com/skylot/jadx/releases/download/v1.5.0/jadx-1.5.0.zip"
-            curl -sL -o app/src/main/assets/tools/radare2.tar.gz \
-              "https://github.com/radareorg/radare2/releases/download/5.9.8/radare2-5.9.8-android-aarch64.tar.gz"
-            curl -sL -o app/src/main/assets/tools/rizin.tar.gz \
-              "https://github.com/rizinorg/rizin/releases/download/v0.7.4/rizin-v0.7.4-android-aarch64.tar.gz"
-            # Ubuntu 24.04 rootfs：下载官方 minbase 资产 -> qemu chroot 注入编译工具链 -> 重打包
-            # （minbase 无 gcc/g++/make/cmake/java/git，直接打包会导致容器开箱无法编译）
-            curl -sL -o /tmp/ubuntu-minbase.tar.xz \
+            test -s app/src/main/assets/tools/apktool.jar || { echo "apktool 下载失败"; exit 1; }
+            # Ubuntu 24.04 rootfs：proot-distro 官方 minbase 原样入包（arm64 约 65M）。
+            # 不再 CI qemu 注入编译工具链（省 ~234M）；工具链改设备端
+            # dev-tools `ubuntu_toolchain_install`（root chroot 内 apt 真机实测全绿，坑 38）。
+            curl -sL -o app/src/main/assets/ubuntu-rootfs.tar.xz \
               "https://github.com/termux/proot-distro/releases/download/v4.18.0/ubuntu-noble-aarch64-pd-v4.18.0.tar.xz"
-            test -s /tmp/ubuntu-minbase.tar.xz || { echo "minbase rootfs 下载失败"; exit 1; }
-            bash scripts/inject-ubuntu-toolchain.sh \
-              /tmp/ubuntu-minbase.tar.xz app/src/main/assets/ubuntu-rootfs.tar.xz arm64
+            test -s app/src/main/assets/ubuntu-rootfs.tar.xz || { echo "minbase rootfs 下载失败"; exit 1; }
             du -sh app/src/main/assets/tools app/src/main/assets/ubuntu-rootfs.tar.xz
           fi
 

@@ -4,7 +4,8 @@
  * Seagull fork 执行模型（2026-09-02 复盘定案）：
  *   双路径执行 APK 工具链，均跑在宿主（Termux）——**不经 Ubuntu 容器**：
  *     1) 优先 usr/bin/{apktool,jadx,apksigner}（install-java-tools.sh 按需装配的 wrapper）
- *     2) 缺则回退 usr/share/{apktool,jadx}（assets/tools 内置 jar，离线兜底）+ usr/bin/java
+ *     2) 缺则回退 usr/share/{apktool,jadx}（apktool=APK 内置资产解压；jadx=tool_install 在线装，
+ *        解到 usr/share/jadx 同构布局）+ usr/bin/java
  *   工具就绪门槛：java（openjdk-21）必须在；apktool/jadx/apksigner 任一路径可用。
  *   全缺时返回明确引导（install-java-tools.sh），不静默失败。
  *
@@ -170,7 +171,7 @@ function toolReady() {
 }
 
 function installGuide() {
-  return '缺少 ' + toolReady().join('、') + '。请先运行：install-java-tools.sh（快照 usr/bin 内，按需安装器）；或确认内置 jar 资产已解压';
+  return '缺少 ' + toolReady().join('、') + '。请先运行：install-java-tools.sh（快照 usr/bin 内，按需安装器）；jadx 亦可经 tool_install jadx 在线安装（轻资产：jadx 不再随 APK 内置）';
 }
 
 async function runTool(name, jarRel, args, timeout, cpMain) {
