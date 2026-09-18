@@ -22,7 +22,9 @@
  * 就绪后接通）；未授权时全部工具返回引导——与 PRD "未授权时全部失败关闭" 语义一致。
  */
 import { Context } from '@deepseek-ai/cordis'
-import { defineTool, type JsonValue } from '@deepseek-ai/dsh-tools'
+import { defineTool } from '@deepseek-ai/dsh-tools'
+// dsh-tools 0.1.5 dropped the re-export; JsonValue now lives in its own util package.
+import type { JsonValue } from '@deepseek-ai/dsh-util-values'
 import { join } from 'node:path'
 import { existsSync, readFileSync, rmSync } from 'node:fs'
 import { parseUiTreeXml, pruneNodes, resolveRef, findActionableAncestor, type UiNode } from './ui-tree.js'

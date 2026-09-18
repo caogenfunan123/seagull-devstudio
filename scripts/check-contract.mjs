@@ -65,11 +65,17 @@ for (const key of contract.envContract.keys) {
 }
 
 console.log('== 6. 版本钉（package.json vs contract.json） ==')
+// Upstream does not republish every package on each engine train (e.g.
+// dsh-client-runtime has no 0.1.5 line); baselineExceptions pins those
+// per-package so the gate stays meaningful instead of permanently red.
+const exceptions = contract.baselineExceptions ?? {}
 for (const repo of contract.inserted.map(i => i.repo)) {
   const pkg = JSON.parse(readFileSync(join(root, repo, 'package.json'), 'utf8'))
   for (const [dep, pin] of Object.entries(pkg.devDependencies ?? {})) {
-    if (dep.startsWith('@deepseek-ai/dsh-') && pin !== contract.baseline) {
-      fail(repo + ': ' + dep + ' 钉 ' + pin + ' ≠ 基线 ' + contract.baseline)
+    if (!dep.startsWith('@deepseek-ai/dsh-')) continue
+    const want = exceptions[dep] ?? contract.baseline
+    if (pin !== want) {
+      fail(repo + ': ' + dep + ' 钉 ' + pin + ' ≠ 基线 ' + want)
     }
   }
   const cordisPin = pkg.devDependencies?.['@deepseek-ai/cordis'] ?? pkg.peerDependencies?.['@deepseek-ai/cordis']

@@ -1,0 +1,9 @@
+{"ts":"2026-09-18T15:29:39.857Z","action":"termux-channel","args":{"command":"echo hi"},"result":"denied-not-gated"}
+{"ts":"2026-09-18T15:29:39.859Z","action":"termux-channel","args":{"command":"echo hi"},"result":"denied-not-gated"}
+{"ts":"2026-09-18T15:29:39.860Z","action":"termux-channel","args":{"command":"echo hi"},"result":"ok"}
+{"ts":"2026-09-18T15:29:39.860Z","action":"termux-channel","args":{"command":"echo hi"},"result":"denied-not-gated"}
+{"ts":"2026-09-18T15:29:39.861Z","action":"termux-channel","args":{"command":"echo hi"},"result":"denied-not-gated"}
+{"ts":"2026-09-18T15:29:39.862Z","action":"termux-channel","args":{"command":"rm -rf /"},"result":"denied-danger"}
+{"ts":"2026-09-18T15:29:39.866Z","action":"screenshot","tool":"android-manage","args":{"textRedact":false},"result":"denied"}
+{"ts":"2026-09-18T15:29:39.866Z","action":"screenshot","tool":"android-manage","args":{"textRedact":false},"result":"ok"}
+{"ts":"2026-09-18T15:29:39.867Z","action":"termux-channel","args":{"command":"echo hi"},"result":"denied-not-gated"}
