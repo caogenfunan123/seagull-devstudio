@@ -28,7 +28,7 @@ function sha256File(path) {
 function tarIndex(archive) {
   const py = 'import tarfile,json,sys\n' +
     't=tarfile.open(sys.argv[1])\n' +
-    'out=[{"name":m.name,"size":(0 if m.isdir() else m.size),"type":("d" if m.isdir() else ("l" if m.issym() else "f"))} for m in t]\n' +
+    'out=[{"name":m.name,"size":(0 if m.isdir() else m.size),"link":(m.linkname if m.issym() else ""),"type":("d" if m.isdir() else ("l" if m.issym() else "f"))} for m in t]\n' +
     'print(json.dumps(out))\n'
   const r = spawnSync('python3', ['-c', py, archive], { maxBuffer: 256 * 1024 * 1024, encoding: 'utf8' })
   if (r.status !== 0) throw new Error('tarIndex 失败: ' + (r.stderr || '').slice(0, 400))
@@ -50,11 +50,17 @@ function normalizeIndex(index) {
   return { norm, hasTop: !!top }
 }
 
-/** 从归档流式抽取指定成员（按原始名）计算 sha256。 */
+/** 从归档流式抽取指定成员（按原始名）计算 sha256；仅用于常规文件。 */
 function memberSha(archive, rawName) {
   const r = spawnSync('tar', ['-xf', archive, rawName, '-O'], { maxBuffer: 512 * 1024 * 1024 })
   if (r.status !== 0) return null
   return createHash('sha256').update(r.stdout).digest('hex')
+}
+
+/** 与壳侧 verifyRootfs 同口径：软链成员哈希 = sha256(链接目标字符串)，绝不用 tar -O（对软链吐 0 字节）。 */
+function probeSha(m, archive) {
+  if (m.type === 'l') return createHash('sha256').update(Buffer.from(m.link || '', 'utf8')).digest('hex')
+  return memberSha(archive, m.name)
 }
 
 const manifest = { version: 1, generated: new Date().toISOString(), assets: {}, probes: {}, rootfsStats: {} }
@@ -76,7 +82,7 @@ if (existsSync(rootfs)) {
   for (const p of PROBE_MEMBERS) {
     const m = byPath.get(p)
     if (!m) continue
-    const s = memberSha(rootfs, m.name)
+    const s = probeSha(m, rootfs)
     if (s) manifest.probes[p] = s
   }
   // 统计：唯一落点数与文件总字节（软链按 0 计，壳侧 walk 同口径）。
