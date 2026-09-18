@@ -52,6 +52,8 @@
 - 本地：node --check 全脚本；6 JS 包 install+build；ui-responsive 测试；check-contract / check-patch-mounts / smoke-bridge；
   manifest 生成脚本对样例 rootfs 实测；纯 JS 逻辑（镜像链 URL 变换、manifest 解析）配 mock 跑通。
 - Kotlin：本地无 Android SDK，走独立分支 push + PR 触发 pr-gate（compileDebugKotlin）验证，绿后 merge main。
+  （实际执行注：PR gate 因账户 Actions 计费阻断无法起跑，改沙箱装 SDK 36 本地实跑
+  `./gradlew :app:compileDebugKotlin` 等效验证——BUILD SUCCESSFUL，见复盘第三轮。）
 - CI：pr-gate 绿 → build-apk 盯到 success，Release 产物核对体积。
 
 ## 5. 风险与对策
@@ -99,6 +101,16 @@
   非本轮回归。YAML parse OK；EngineManager.kt 括号配平机检 OK（字符串/注释/三引号先行剥离）。
 - Kotlin 完整编译验证 = 第三轮（PR gate 实跑，本地无 Android SDK 不装样子）。
 
-### 复盘第三轮（PR gate 编译验证 + 收口）
+### 复盘第三轮（编译验证 + 收口）
 
-（Kotlin compileDebugKotlin 经分支 PR 触发 pr-gate.yml 实机编译，结果登记于下）
+- **环境实锤（非代码问题）**：PR #1 触发 pr-gate 双 job 均「failure」，annotations 实锤
+  = `The job was not started because recent account payments have failed or your spending
+  limit needs to be increased`——当日 15:32 同仓库双 workflow 尚全绿（~90min runner 时长），
+  21:48 起 job 无法排队：账户级 Actions 计费/支出限额阻断，rerun（attempt 2）秒败同因。
+- **替代验证（本地实跑 gradle）**：沙箱装 Android SDK（commandlinetools + platforms;android-36
+  + build-tools;36.0.0）后 `./gradlew :app:compileDebugKotlin --no-daemon` → **BUILD SUCCESSFUL
+  (2m34s, rc=0)**——与 CI 编译门禁同一 task、同 compileSdk 36 语义，EngineManager.kt 全部新
+  代码（staging/promoteTree/verifyRootfs/AssetManifest/stamp）实机编译通过，仅存量 deprecation
+  警告（MainActivity/OverlayService，非本轮触面）。
+- 结论：三轮复盘收口。代码面：静态 diff 审查修 3 处 → 行为仿真 + 门禁全绿 → 真机同版编译门禁绿。
+  CI 面：合入 main 触发 build-apk；若仍被计费阻断，恢复后 re-run workflow 即出包（构建链无代码依赖此阻断）。
