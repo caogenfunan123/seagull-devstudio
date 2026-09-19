@@ -30,6 +30,10 @@ jobs:
       - name: 资产清单防坏门禁（坑 44/45/47 回归）
         run: |
           node scripts/check-asset-manifest.mjs
+      - name: 开机装配脚本一致性（坑 48 回归）
+        run: |
+          node scripts/check-boot-script.mjs
+          node scripts/sim-boot-script.mjs
 
   compile:
     name: Kotlin 编译门禁

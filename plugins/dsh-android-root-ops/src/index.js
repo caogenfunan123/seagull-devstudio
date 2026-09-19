@@ -86,6 +86,82 @@ function detectDanger(command) {
   return null;
 }
 
+/**
+ * 坑 48：Ubuntu 容器开机装配脚本（唯一权威版本）。
+ * 历史版本把整块 files/home bind 进 rootfs/host-home，而 ubuntu-rootfs 本身就住在
+ * files/home/.dsh/ 下 → du / Android 应用大小顺着 bind 把整块 home 再数一遍（设备
+ * 显示 5GB，虚高 2.2GB；同 fs bind 使 du -x 也救不了）。修复 = 只 bind 容器确实要读
+ * 的叶子目录（fetched/workspaces → /host-shared/*），并在启动时摘除遗留 over-broad bind。
+ * 与 scripts/seagull-ubuntu-boot.sh 保持逐字节一致（pr-gate 的 check-boot-script.mjs 强制）。
+ */
+const BOOT_SCRIPT = String.raw`#!/system/bin/sh
+# =============================================================================
+# Seagull DevStudio — Ubuntu 容器开机自启装配（受控模板 / source of truth）
+#
+# 安装位置： /data/adb/service.d/seagull-ubuntu.sh （KernelSU / Magisk boot service）
+# 由 root-ops 插件 'ubuntu_boot_fix' 工具落盘/修补；本文件是仓库内唯一权威版本。
+#
+# 为什么有这个脚本（坑 48）：
+#   历史版本把「整块 files/home」bind 进 rootfs/host-home，而 ubuntu-rootfs 本身就住在
+#   files/home/.dsh/ 下 —— 于是 host-home 里又看到整块 home（含 rootfs 父目录）。
+#   内核 bind 不会真死循环，但 du / Android「应用大小」统计顺着 host-home 把整块 home
+#   再数一遍 → 设备显示 5GB（虚高 2.2GB）。
+#   正确做法：只 bind「容器确实要读的最小宿主目录」（fetched / workspaces），
+#   绝不 bind files/home 或 .dsh 这种「包含 rootfs 自身」的祖先目录。
+# =============================================================================
+
+PKG=com.dsharnessmobile.shell
+DATA=/data/data/$PKG/files
+HOME_DIR="$DATA/home"
+ROOTFS="$HOME_DIR/.dsh/ubuntu-rootfs"
+# 容器内共享根（叶子目录，绝不指向 home/.dsh 祖先）
+FETCHED="$HOME_DIR/.dsh/fetched"
+WORKSPACES="$HOME_DIR/.dsh/workspaces"
+C_FETCHED="$ROOTFS/host-shared/fetched"
+C_WORKSPACE="$ROOTFS/host-shared/workspace"
+
+mount_bind() { # src dst —— 幂等：已挂同 src 到 dst 则跳过
+  src="$1"; dst="$2"
+  [ -e "$src" ] || return 0
+  mkdir -p "$dst"
+  if grep -q " $dst " /proc/mounts 2>/dev/null; then
+    cur=$(awk -v d="$dst" '$2==d{print $1; exit}' /proc/mounts 2>/dev/null)
+    [ "$cur" = "$src" ] && return 0
+    umount -l "$dst" 2>/dev/null
+  fi
+  mount --bind "$src" "$dst" 2>/dev/null
+}
+
+# 0) 摘除历史遗留的「整块 home → host-home」over-broad bind（幂等，先摘后窄挂）
+LEGACY="$ROOTFS/host-home"
+if grep -q "$LEGACY" /proc/mounts 2>/dev/null; then
+  umount -l "$LEGACY" 2>/dev/null
+fi
+rmdir "$LEGACY" 2>/dev/null
+
+# 1) 标准 proc/dev/sys 挂载（root chroot 用；proot 路径不需要，各自幂等）
+[ -d "$ROOTFS/proc" ] || mkdir -p "$ROOTFS/proc"
+mount -t proc proc "$ROOTFS/proc" 2>/dev/null
+mount --bind /dev "$ROOTFS/dev" 2>/dev/null
+mount -t devpts devpts "$ROOTFS/dev/pts" 2>/dev/null
+
+# 2) 窄共享 bind（关键修复）：只暴露容器要读的叶子目录，绝不 bind home/.dsh 祖先
+mount_bind "$FETCHED"    "$C_FETCHED"
+mount_bind "$WORKSPACES" "$C_WORKSPACE"
+
+# 3) DNS（rootfs 若无 resolv.conf 则写占位）
+[ -s "$ROOTFS/etc/resolv.conf" ] || printf 'nameserver 8.8.8.8\nnameserver 114.114.114.114\n' > "$ROOTFS/etc/resolv.conf" 2>/dev/null
+
+# 4) qemu binfmt（仅当存在静态 qemu-aarch64 注册器时；best-effort，失败不影响原生 arm64 设备）
+[ -x /data/local/tmp/qemu-aarch64-static ] && [ ! -e /proc/sys/fs/binfmt_misc/qemu-aarch64 ] && {
+  mount -t binfmt_misc none /proc/sys/fs/binfmt_misc 2>/dev/null
+  printf ':qemu-aarch64:M::\x7fELF\x02\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02\x00\x00\x00:\xff\xff\xff\xff\xff\xff\xff\x00\xff\xff\xff\xff\xff\xff\xff\xff\xfe\xff\xff\xff:/data/local/tmp/qemu-aarch64:OC\n' >/proc/sys/fs/binfmt_misc/register 2>/dev/null
+}
+
+exit 0
+`;
+
+
 async function runSu(args, opts = {}) {
   const command = args[0] === '-c' ? String(args[1] ?? '') : args.join(' ');
   const danger = detectDanger(command);
@@ -374,7 +450,8 @@ function tools(keepalive) {
     name: 'root_fetch',
     description:
       'Copy a device file (any path, incl. binary) into the host home (.dsh/fetched/) so the model ' +
-      'and the Ubuntu container can read it. Host home is bind-mounted into the container.',
+      'and the Ubuntu container can read it. .dsh/fetched is narrow-bind-mounted into the ' +
+      'container at /host-shared/fetched (pitfall 48: never bind whole host home).',
     parameters: {
       path: { type: 'string', required: true, description: 'Source file path on device.' },
       dest: { type: 'string', description: 'Host destination path (default home/.dsh/fetched/<basename>).' },
@@ -393,8 +470,9 @@ function tools(keepalive) {
   const deployTool = defineTool({
     name: 'root_deploy',
     description:
-      'Copy a host file (incl. binary) to any device path with root privileges. Host home files ' +
-      'are visible to the container (bind mount) and to root.',
+      'Copy a host file (incl. binary) to any device path with root privileges. Files under ' +
+      '.dsh/fetched are visible to the container via the narrow bind at /host-shared/fetched ' +
+      '(pitfall 48) and to root.',
     parameters: {
       src: { type: 'string', required: true, description: 'Host source file path (absolute).' },
       dest: { type: 'string', required: true, description: 'Device destination path (absolute).' },
@@ -407,7 +485,64 @@ function tools(keepalive) {
     },
   });
 
-  return [rootTool, uiTool, statusTool, lsTool, catTool, pushTool, pullTool, fetchTool, deployTool];
+  const bootFixTool = defineTool({
+    name: 'ubuntu_boot_fix',
+    description:
+      'Repair the Ubuntu container boot service (pitfall 48): replaces the legacy ' +
+      '/data/adb/service.d/seagull-ubuntu.sh that bind-mounts the WHOLE host home into ' +
+      'ubuntu-rootfs/host-home (inflates the app storage size ~2x in Settings/du) with the ' +
+      'repo-authoritative narrow-bind version, backs up the old file, unmounts the legacy bind ' +
+      'right now, and re-runs the fixed script. Idempotent: safe to call repeatedly.',
+    parameters: {},
+    output: { schema: { type: 'object', additionalProperties: true }, render: renderText },
+    async execute() {
+      const SVC = '/data/adb/service.d/seagull-ubuntu.sh';
+      const LEGACY = '/data/data/com.dsharnessmobile.shell/files/home/.dsh/ubuntu-rootfs/host-home';
+      // 1) 备份旧脚本（存在才备；.bak 带时间戳，不覆盖历史备份）
+      const bak = await runSu(['-c',
+        `[ -f ${SVC} ] && /system/bin/cp ${SVC} ${SVC}.bak.$(date +%s) && echo BACKED_UP || echo NO_OLD_SCRIPT`,
+      ], { timeout: 20000, action: 'boot-fix-backup' });
+      if (!bak.ok) return { ok: false, step: 'backup', error: bak.error || bak.stderr };
+      // 2) 落盘权威脚本（base64 传输避引号地狱；写后 sh -n 语法验证，坏了回滚）
+      const b64 = Buffer.from(BOOT_SCRIPT, 'utf8').toString('base64');
+      const write = await runSu(['-c',
+        `mkdir -p /data/adb/service.d; printf '%s' '${b64}' | /system/bin/base64 -d > ${SVC}.new 2>&1` +
+        ` && /system/bin/sh -n ${SVC}.new 2>&1 && /system/bin/mv ${SVC}.new ${SVC}` +
+        ` && /system/bin/chmod 755 ${SVC} && echo WROTE || { rm -f ${SVC}.new; echo WRITE_FAILED; }`,
+      ], { timeout: 30000, action: 'boot-fix-write' });
+      if (!write.ok || !/WROTE/.test(write.stdout || write.stderr || '')) {
+        return { ok: false, step: 'write', error: write.error || write.stdout || write.stderr };
+      }
+      // 3) 立即摘除遗留 over-broad bind（lazy umount 安全：不碰 /data 真文件）
+      const unmount = await runSu(['-c',
+        `grep -q ${shellQuote(LEGACY)} /proc/mounts 2>/dev/null && /system/bin/umount -l ${shellQuote(LEGACY)} && echo UNMOUNTED || echo NOT_MOUNTED`,
+      ], { timeout: 20000, action: 'boot-fix-unmount' });
+      // 4) 幂等执行新脚本，当场挂上窄共享 bind
+      const run = await runSu(['-c', `${SVC} 2>&1; echo RC=$?`], { timeout: 60000, action: 'boot-fix-run' });
+      // 5) 验证：mountinfo 里不再有 host-home、出现 host-shared
+      const verify = await runSu(['-c',
+        `echo LEGACY=$(grep -c host-home /proc/mounts 2>/dev/null || echo 0) SHARED=$(grep -c host-shared /proc/mounts 2>/dev/null || echo 0)`,
+      ], { timeout: 20000, action: 'boot-fix-verify' });
+      const v = (verify.stdout || '').trim();
+      const legacyLeft = /LEGACY=(\d+)/.exec(v);
+      const sharedNow = /SHARED=(\d+)/.exec(v);
+      const converged = verify.ok && legacyLeft && Number(legacyLeft[1]) === 0;
+      return {
+        ok: converged,
+        backup: bak.stdout,
+        wrote: true,
+        unmount: unmount.stdout || unmount.error,
+        bootRun: run.stdout,
+        mounts: v,
+        sharedBinds: sharedNow ? Number(sharedNow[1]) : 0,
+        note: converged
+          ? 'host-home 已摘除，下次开机起 service.d 脚本只挂窄共享 bind（fetched/workspaces → /host-shared/*）。应用显示体积将回落 ~2.2GB。'
+          : '验证未收敛：/proc/mounts 仍有 host-home 条目，请贴 verify 输出复核。',
+      };
+    },
+  });
+
+  return [rootTool, uiTool, statusTool, lsTool, catTool, pushTool, pullTool, fetchTool, deployTool, bootFixTool];
 }
 
 // C 方案：显式声明 tools 硬依赖（对齐 bridge/manage），修复 ctx.get('tools') 静默 undefined。
