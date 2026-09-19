@@ -114,3 +114,26 @@
   警告（MainActivity/OverlayService，非本轮触面）。
 - 结论：三轮复盘收口。代码面：静态 diff 审查修 3 处 → 行为仿真 + 门禁全绿 → 真机同版编译门禁绿。
   CI 面：合入 main 触发 build-apk；若仍被计费阻断，恢复后 re-run workflow 即出包（构建链无代码依赖此阻断）。
+
+## 7. 真机报告反查（追加，坑 47）
+
+三轮复盘的「行为仿真」用的假 rootfs 只有 8 成员、无软链落在 `PROBE_MEMBERS`，恰好漏掉一种不对称：
+- **生成端** `memberSha` = `tar -O`，对软链吐 0 字节 → `sha256("")`；
+- **壳端** `verifyRootfs` 对软链 = `sha256(readSymbolicLink().toString())`。
+
+设备端报告「`/home/.dsh/ubuntu-rootfs` ≈1.5MB」正击中此路径：真 minbase 里 `etc/os-release` 就是软链
+（→ `../usr/lib/os-release`），完整解压也必抛 `probe hash mismatch` → stamp 永不写 → 每次冷启
+全量重解 → 反复失败留下的碎片远小于 293M。
+
+修复 = 新增 `probeSha()`，软链成员按链接目标串哈希、常规文件保持 `tar -O`；tarIndex 补 `link` 字段透传。
+回归门禁 = `scripts/check-asset-manifest.mjs`（合成含软链 probe 成员的假 rootfs，逐条复刻壳侧
+`verifyRootfs` 双向对账，硬断言「软链 probe 哈希 != sha256("")」）。
+
+端到端复验 = 对真实 12683 成员 rootfs 逐行复刻 `verifyRootfs` 算法：
+① 修前清单跑完整解压 → `etc/os-release` MISMATCH，exit=1（复现永不收敛）；
+② 修后清单跑完整解压 → CONVERGED（12683=12683、bytes 292934755 精确、4/4 probes 全绿）；
+③ 修后清单跑半份树 → walk 3351 < 12683 立即 FAIL（下界捕获仍有效）。
+
+伴生澄清：Java `File(parent, "/abs/x")` 会把绝对链接重挂 dest 内，1517 软链 shell-canonical 全通过
+（早期"215 unsafe"扫描是误报）。产物：重打包 APK 349M，`sha256 69af991490e0c34b334011a47e1b4f73ead9f587f6d505354aab3a87e7f776e3`，
+已直传替换 Release v0.13.2-seagull-light 的旧坏包。

@@ -27,6 +27,9 @@ jobs:
             exit 1
           fi
           echo "无敏感信息 ✓"
+      - name: 资产清单防坏门禁（坑 44/45/47 回归）
+        run: |
+          node scripts/check-asset-manifest.mjs
 
   compile:
     name: Kotlin 编译门禁
