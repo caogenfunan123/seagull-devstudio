@@ -45,3 +45,9 @@ self-mount 即停），但 `du` 与 Android「应用大小」统计顺着这层 
 真实占用约 2.6GB；5GB 显示里 2.2GB 是 host-home bind 虚高。用户可按需装的 jvm/llvm 工具链
 （~900MB）是 P2 设计意图（`docs/light-assets/ARCHITECTURE.md`），不是残留。可安全删的真残留
 （settings_patch/settings_out/am_final 共 176MB）已由用户清除。
+
+## 产物
+含 `ubuntu_boot_fix` 的 APK 已直传替换 Release `v0.13.2-seagull-light` 资产
+（asset 573870800，349MB，sha256 `16aa488f603d9e5d4b22e17937fadae3c0c8ba9156673501375730eb0ce8086f`，
+内嵌 asset-manifest 为坑 47 修复后口径：os-release probe=d9a42455、members=12683）。
+设备装新包后直接对 AI 说「跑 ubuntu_boot_fix」即可完成本文「修复」一节的全部动作，无需手敲。
