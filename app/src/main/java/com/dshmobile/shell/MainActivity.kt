@@ -53,6 +53,8 @@ class MainActivity : ComponentActivity() {
 
   private lateinit var webView: WebView
   private lateinit var guideView: LinearLayout
+  /** 悬浮终端入口承载容器（0.13.3 P3）：引擎页可见时显示，guide 页隐藏 */
+  private lateinit var consoleRoot: FrameLayout
   /** 悬浮终端入口（0.13.3 P3）：引擎页可见时显示，guide 页隐藏 */
   private lateinit var consoleFab: Button
   /** Bottom insets in CSS px, cached until the engine page is ready to receive them. */
@@ -431,7 +433,7 @@ class MainActivity : ComponentActivity() {
     // 沉浸式：内容延伸到系统栏区域（状态栏常态收起，边缘滑动临时呼出）。
     WindowCompat.setDecorFitsSystemWindows(window, false)
     applyImmersive(immersivePrefs())
-    val root = FrameLayout(this)
+    val root = FrameLayout(this).also { consoleRoot = it }
     webView = WebView(this).apply {
       id = View.generateViewId()
       visibility = View.GONE
@@ -666,10 +668,10 @@ class MainActivity : ComponentActivity() {
     super.onDestroy()
     // 悬浮球避让帧消费者清除（Service 侧持有引用，避免 Activity 泄漏）
     OverlayService.frameConsumer = null
-    // 悬浮终端入口清理：移除 FrameLayout 子视图，断引用链，避免内存泄漏。
+    // 悬浮终端入口清理：移除承载容器上的悬浮按钮（lateinit 不可置空，Activity 销毁
+    // 时视图层级自然释放，移除即断 Activity 该子视图引用）。
     if (::consoleFab.isInitialized) {
-      try { (root as? android.view.ViewGroup)?.removeView(consoleFab) } catch (_: Throwable) {}
-      consoleFab = null as? Button
+      try { consoleRoot.removeView(consoleFab) } catch (_: Throwable) {}
     }
     engineMonitorHandler.removeCallbacks(engineMonitorRunnable)
     freezeHandler.removeCallbacks(freezeRunnable)
