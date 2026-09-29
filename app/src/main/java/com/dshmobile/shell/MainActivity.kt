@@ -666,6 +666,11 @@ class MainActivity : ComponentActivity() {
     super.onDestroy()
     // 悬浮球避让帧消费者清除（Service 侧持有引用，避免 Activity 泄漏）
     OverlayService.frameConsumer = null
+    // 悬浮终端入口清理：移除 FrameLayout 子视图，断引用链，避免内存泄漏。
+    if (::consoleFab.isInitialized) {
+      try { (root as? android.view.ViewGroup)?.removeView(consoleFab) } catch (_: Throwable) {}
+      consoleFab = null as? Button
+    }
     engineMonitorHandler.removeCallbacks(engineMonitorRunnable)
     freezeHandler.removeCallbacks(freezeRunnable)
     pickTtlHandler.removeCallbacks(pickTtlRunnable)
