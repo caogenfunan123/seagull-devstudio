@@ -69,7 +69,7 @@ jobs:
             (cd "$d" && npm install --no-audit --no-fund && npm run build)
           done
           # Seagull 纯 JS 插件：src -> lib 直拷（无 npm 依赖）
-          for p in seagull root-ops dev-tools apk-tools tool-installer; do
+          for p in seagull root-ops dev-tools apk-tools tool-installer disk-maintainer backup; do
             echo "== build plugin $p =="
             node scripts/build-plugin.mjs "$p"
           done
