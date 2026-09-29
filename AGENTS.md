@@ -231,7 +231,7 @@ cd ..\plugins\dsh-android-<pkg> && npm run build
 
 本 fork 在 0.13.2-preview 基础上注入 Seagull（海鸥）全能开发能力，改动面：
 
-- **品牌与包名**：`app_name=Seagull DevStudio`，`ds_brand_subtitle=Ubuntu ARM64 开发者运行时`；包名保持 `com.dsharnessmobile.shell` 不变（避免路径大地震），versionName `0.13.2-seagull`，仅 `arm64-v8a`（`abiFilters` 单保留）。
+- **品牌与包名**：`app_name=Seagull DevStudio`，`ds_brand_subtitle=Ubuntu ARM64 开发者运行时`；包名保持 `com.dsharnessmobile.shell` 不变（避免路径大地震），versionName `0.13.3-seagull`，仅 `arm64-v8a`（`abiFilters` 单保留）。
 - **新增 5 个 `@dsh-android/dsh-android-*` 插件**（纯 JS，`src/` → `lib/` 由 `scripts/build-plugin.mjs` 构建，`lib/` 不入库）：
   - `dsh-android-seagull`：海鸥 persona 注入器——加载包内 `persona.md`（即完整海鸥 3.0 破甲，来自 `presets/seagull-root/SEAGULL_FULL_INSTRUCTIONS.md`）经 `system-prompt/assemble` 注入每条会话。复刻 live `dsh-seagull` 成熟机制。
   - `dsh-android-root-ops`：root 工具（`root_exec`/`device_ui_control`/`root_status` + `root_ls`/`root_cat`/`root_push`/`root_pull`/`root_fetch`/`root_deploy` 文件操作）+ root 保活（60s 巡检 + KernelSU allowlist 自愈）+ 仅 danger-full-access 时注入 root 感知提示。用干净 env 调 `/system/bin/su`。`root_fetch`/`root_deploy` 补设备↔宿主双向二进制搬移（容器经窄共享 bind 读 `$HOME/.dsh/fetched` ↔ 容器内 `/host-shared/fetched`，坑 48 后不再整块挂 home）。`ubuntu_boot_fix`（坑 48 修复工具）：备份并替换设备上的 `/data/adb/service.d/seagull-ubuntu.sh` 为 `scripts/seagull-ubuntu-boot.sh` 权威模板（内嵌逐字节一致由 `check-boot-script.mjs` 门禁保证）、`umount -l` 遗留 host-home bind、重跑并以 `/proc/mounts` host-home 计数归零判收敛。**root 审计**：每次 root 命令写 `files/audit/audit.ndjson`（tool=root-ops；命令只记长度+sha256 前缀+前 200 字符，不落全文）+ **高危命令拦截**（`rm -rf /`/`mkfs`/`dd` 写块设备/`shred`，命中默认拒绝，`force=true` 放行并审计 danger 标记）。
