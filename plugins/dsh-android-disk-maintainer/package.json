@@ -1,0 +1,11 @@
+{
+  "name": "@dsh-android/dsh-android-disk-maintainer",
+  "version": "1.0.0",
+  "description": "Disk maintenance: TTL clean of fetched/tmp/sessions/compile-cache; workspaces report-only (0.13.3 P1)",
+  "main": "lib/index.js",
+  "type": "module",
+  "dependencies": {},
+  "scripts": {
+    "build": "node ../../scripts/build-plugin.mjs disk-maintainer"
+  }
+}

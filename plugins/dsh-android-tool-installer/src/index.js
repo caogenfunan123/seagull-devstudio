@@ -7,7 +7,7 @@
  * C 方案修复 (2026-09-01)：对齐 dsh-android-bridge 成功模式——
  *   inject 声明 tools 硬依赖 + defineTool 包装工具，修复 ctx.get('tools') 静默 undefined。
  */
-import { mkdirSync, existsSync, createWriteStream, createReadStream } from 'node:fs';
+import { mkdirSync, existsSync, createWriteStream, createReadStream, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import https from 'node:https';
 import { execFile } from 'node:child_process';
@@ -294,9 +294,85 @@ function tools(service) {
 // C 方案：显式声明 tools 硬依赖（对齐 bridge/manage），修复 ctx.get('tools') 静默 undefined。
 export const inject = ['tools'];
 
+/**
+ * 首启工具链探针（0.13.3 P0，UPGRADE-PLAN.md §3-P0）：
+ * 「每次 AI 都要修工具链」的根因不是工具缺失，而是环境没配对 + 无自检——
+ * 工具文件在场但 jadx 报 tmpdir 不存在（坑39 openjdk 编译期路径）、radare2 报
+ * libr_cons.so not found（LD_LIBRARY_PATH 缺 share/radare2/lib）。探针逐工具
+ * 验证「落点在场 + --version 可跑」，结果写 .toolchain-probe.json 缓存
+ * （文件供 linux-env 设置面与 AI 排障读取）。探测 env 与 shell-termux 的
+ * env 语义一致（PATH 含 share 下各工具 bin、LD_LIBRARY_PATH 含 radare2 lib、
+ * JAVA_TOOL_OPTIONS 双通道修 tmpdir）。
+ */
+const PROBE_TIMEOUT_MS = 20_000;
+
+function probeEnv() {
+  const home = process.env.DSH_HOME
+    ? join(process.env.DSH_HOME, '..')
+    : '/data/data/com.dsharnessmobile.shell/files/home';
+  const dshRoot = process.env.DSH_HOME || '/data/data/com.dsharnessmobile.shell/files/home/.dsh';
+  const tmp = join(dshRoot, 'tmp');
+  try { mkdirSync(tmp, { recursive: true }); } catch { /* 已在则忽略 */ }
+  return {
+    PATH: [join(USR, 'bin'), join(USR, 'share', 'jadx', 'bin'), join(USR, 'share', 'radare2', 'bin'), '/system/bin'].join(':'),
+    LD_LIBRARY_PATH: [join(USR, 'lib'), join(USR, 'share', 'radare2', 'lib')].join(':'),
+    HOME: home,
+    PREFIX: USR,
+    TMPDIR: tmp,
+    TMP: tmp,
+    TEMP: tmp,
+    JAVA_TOOL_OPTIONS: `-Duser.home=${home} -Djava.io.tmpdir=${tmp}`,
+  };
+}
+
+/** 注册表条目 → 实际可执行验证命令（落点在场 + 版本可读两关）。 */
+function probeCommands() {
+  return {
+    apktool: { argv: ['java', '-jar', TOOL_REGISTRY.apktool.installPath, '--version'], path: TOOL_REGISTRY.apktool.installPath },
+    jadx: { argv: [join(TOOL_REGISTRY.jadx.installPath, 'bin', 'jadx'), '--version'], path: join(TOOL_REGISTRY.jadx.installPath, 'bin', 'jadx') },
+    radare2: { argv: [join(TOOL_REGISTRY.radare2.installPath, 'bin', 'radare2'), '-v'], path: join(TOOL_REGISTRY.radare2.installPath, 'bin', 'radare2') },
+    rizin: { argv: [join(TOOL_REGISTRY.rizin.installPath, 'bin', 'rizin'), '-v'], path: join(TOOL_REGISTRY.rizin.installPath, 'bin', 'rizin') },
+  };
+}
+
+async function probeOnce() {
+  const cmds = probeCommands();
+  const out = { ts: new Date().toISOString(), tools: {} };
+  await Promise.all(Object.entries(cmds).map(async ([name, c]) => {
+    if (!existsSync(c.path)) {
+      out.tools[name] = { ok: false, status: 'missing', note: '落点不在场，可用 tool_install 安装' };
+      return;
+    }
+    try {
+      const { stdout } = await execFileAsync(c.argv[0], c.argv.slice(1), {
+        env: probeEnv(), timeout: PROBE_TIMEOUT_MS, maxBuffer: 64 * 1024,
+      });
+      // JAVA_TOOL_OPTIONS 会先向 stderr 打一行 "Picked up ..."，版本号在 stdout 首个非空行
+      const version = (stdout || '').split('\n').map((l) => l.trim()).find(Boolean) || '';
+      out.tools[name] = { ok: true, status: 'ok', version };
+    } catch (err) {
+      out.tools[name] = { ok: false, status: 'broken', error: (err.message || String(err)).slice(0, 300) };
+    }
+  }));
+  return out;
+}
+
 export function apply(ctx) {
   const service = buildService();
   ctx.provide('toolInstaller', service);
   for (const t of tools(service))
     ctx.tools.register(t);
+  // 首启探针：延迟 15s（避开引擎启动高峰与插件树装配期），失败静默（只写报告不阻断）。
+  const timer = setTimeout(() => {
+    probeOnce().then((report) => {
+      try {
+        const dir = process.env.DSH_HOME || '/data/data/com.dsharnessmobile.shell/files/home/.dsh';
+        writeFileSync(join(dir, '.toolchain-probe.json'), JSON.stringify(report, null, 2));
+        const bad = Object.entries(report.tools).filter(([, v]) => !v.ok).map(([k]) => k);
+        if (bad.length) console.log(`[tool-installer] probe: ${bad.join(',')} need attention (see .toolchain-probe.json)`);
+        else console.log('[tool-installer] probe: all tools ok');
+      } catch { /* 报告写失败不影响功能 */ }
+    }).catch(() => { /* 探针失败不阻断 */ });
+  }, 15_000);
+  if (typeof timer.unref === 'function') timer.unref();
 }

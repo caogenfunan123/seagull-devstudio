@@ -26,6 +26,17 @@
         writeMode: workspace-write
         workspaceRoot: /data/data/com.dsharnessmobile.shell/files/home/.dsh/workspaces
         sharedDirs: []
+        # 工具链自愈（0.13.3 P0，UPGRADE-PLAN.md §3-P0）：
+        # - extraPath: relocated 工具的 bin（jadx/radare2 装在 share/ 下，不在 $PREFIX/bin）
+        # - extraLibDirs: radare2 自带 libr_*.so（否则 CANNOT LINK libr_cons.so）
+        # - tmpDir: openjdk 编译期硬编码 com.termux tmp（坑39），本 fork 域不存在
+        #   → TMPDIR/TMP/TEMP + JAVA_TOOL_OPTIONS -Djava.io.tmpdir 双通道
+        extraPath:
+          - /data/data/com.dsharnessmobile.shell/files/usr/share/jadx/bin
+          - /data/data/com.dsharnessmobile.shell/files/usr/share/radare2/bin
+        extraLibDirs:
+          - /data/data/com.dsharnessmobile.shell/files/usr/share/radare2/lib
+        tmpDir: /data/data/com.dsharnessmobile.shell/files/home/.dsh/tmp
     - id: host-web-compat
       name: '@dsh-android/dsh-host-web-compat'
 - id: ui-layout
@@ -73,6 +84,21 @@
 - insert:
     - id: android-file-open
       name: '@dsh-android/dsh-android-file-open'
+
+# 磁盘维护（0.13.3 P1，docs/UPGRADE-PLAN.md §3-P1）：dsh-android-disk-maintainer——
+# 超龄 fetched/tmp/sessions 与超配额 compile-cache 定时清理（6h 周期，首跑延迟 60s）；
+# workspaces 只出体积报告绝不删除（用户数据）。挂载后 60s 首跑，避开引擎启动高峰。
+- insert:
+    - id: android-disk-maintainer
+      name: '@dsh-android/dsh-android-disk-maintainer'
+
+# 备份恢复（0.13.3 P2，docs/UPGRADE-PLAN.md §3-P2）：dsh-android-backup——
+# 四档（full/sessions/settings/plugins 对齐 DSHA BackupScope）tar.gz 归档落 dshdata/exports；
+# 恢复前自动 pre-restore 快照 + zip-slip 防护；档位显式进文件名防误恢复。
+# tar 链走「裸 tar + node zlib」两步（快照 tar.real -z 的 gzip 子进程 exec 实测必挂）。
+- insert:
+    - id: android-backup
+      name: '@dsh-android/dsh-android-backup'
 
 # Default model（0.13.0 C3 端点级实锤修正，2026-08-25）：此前 pin 到 opencode-go
 # （OpenCode Zen Go，opencode.ai/zen/go/v1）——该网关实测对无有效 key 请求返回扁平

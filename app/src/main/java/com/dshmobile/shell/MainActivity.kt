@@ -18,6 +18,10 @@ import android.provider.MediaStore
 import android.util.Log
 import android.view.View
 import android.view.ViewGroup
+import android.view.Gravity
+import android.graphics.Color
+import android.graphics.drawable.GradientDrawable
+import android.widget.Button
 import android.webkit.JsResult
 import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
@@ -49,6 +53,8 @@ class MainActivity : ComponentActivity() {
 
   private lateinit var webView: WebView
   private lateinit var guideView: LinearLayout
+  /** 悬浮终端入口（0.13.3 P3）：引擎页可见时显示，guide 页隐藏 */
+  private lateinit var consoleFab: Button
   /** Bottom insets in CSS px, cached until the engine page is ready to receive them. */
   private var webSystemBottomInset = 0
   private var webImeBottomInset = 0
@@ -433,6 +439,30 @@ class MainActivity : ComponentActivity() {
     root.addView(webView, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
     guideView = buildGuideView()
     root.addView(guideView, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+    // 悬浮终端入口（0.13.3 P3，docs/UPGRADE-PLAN.md §3-P3）：主界面右下角常驻小按钮，
+    // 引擎 Web UI 可见时出现；点按开 ConsoleActivity（内置终端）。不改 WebView/inset 布局，
+    // 避开沉浸式与 OverlayService 避让帧的三重耦合——终端仍走独立 Activity（已验证路径）。
+    consoleFab = Button(this).apply {
+      text = ">_"
+      textSize = 14f
+      isAllCaps = false
+      setTextColor(Color.WHITE)
+      // 圆角胶囊底色（无 Material 依赖；GradientDrawable 即可）
+      background = GradientDrawable().apply {
+        shape = GradientDrawable.RECTANGLE
+        cornerRadius = 28f * resources.displayMetrics.density
+        setColor(Color.parseColor("#CC1F2937"))
+      }
+      elevation = 8f * resources.displayMetrics.density
+      setOnClickListener { startActivity(Intent(this@MainActivity, ConsoleActivity::class.java)) }
+      visibility = View.GONE
+      contentDescription = getString(R.string.ds_open_console)
+    }
+    val fabSize = (52 * resources.displayMetrics.density).toInt()
+    val fabMargin = (20 * resources.displayMetrics.density).toInt()
+    root.addView(consoleFab, FrameLayout.LayoutParams(fabSize, fabSize, Gravity.BOTTOM or Gravity.END).apply {
+      setMargins(0, 0, fabMargin, fabMargin)
+    })
     setContentView(root)
     ViewCompat.setOnApplyWindowInsetsListener(root) { _, insets ->
       val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
@@ -1752,6 +1782,8 @@ class MainActivity : ComponentActivity() {
   private fun showWeb() {
     guideView.visibility = View.GONE
     webView.visibility = View.VISIBLE
+    // 引擎页就绪 → 悬浮终端入口出现（0.13.3 P3）
+    if (::consoleFab.isInitialized) consoleFab.visibility = View.VISIBLE
     // The WebView may have rendered an error page before the engine was
     // ready (engine boot takes seconds); reload now that it answers.
     webView.reload()
@@ -1761,6 +1793,7 @@ class MainActivity : ComponentActivity() {
   private fun showGuide() {
     val becomingVisible = guideView.visibility != View.VISIBLE
     webView.visibility = View.GONE
+    if (::consoleFab.isInitialized) consoleFab.visibility = View.GONE
     guideView.visibility = View.VISIBLE
     if (becomingVisible) animateGuideReveal()
     val crash = crashInfo

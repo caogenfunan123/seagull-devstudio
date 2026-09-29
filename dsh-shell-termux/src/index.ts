@@ -55,6 +55,21 @@ export interface Config extends LocalConfig {
   /** Extra PATH entries prepended to the injected PATH (e.g. /system/bin). */
   extraPath?: string[]
   /**
+   * Extra LD_LIBRARY_PATH entries appended after `$PREFIX/lib` — shared-library
+   * dirs of relocated tools that ship their own libs (radare2's libr_*.so lives
+   * under share/radare2/lib and is invisible to the default lib dir).
+   */
+  extraLibDirs?: string[]
+  /**
+   * Writable temp dir stamped as TMPDIR/TMP/TEMP on every child. Without it,
+   * tools resolve `/tmp` (unwritable in the app domain) or — for the Termux
+   * openjdk build — a compile-time `/data/data/com.termux/...` path that does
+   * not exist in this fork (jadx 'Failed to create temp root directory').
+   * Also emitted via JAVA_TOOL_OPTIONS (AGENTS.md 坑39: openjdk ignores the
+   * TMPDIR env; the JVM only honors -Djava.io.tmpdir/-Duser.home here).
+   */
+  tmpDir?: string
+  /**
    * 写面档位（PRD F1.4/F1.8/D21）：workspace-write（默认，仅工作区与共享目录白名单）|
    * danger-full-access（完全访问档位，开放共享存储全域，仍限应用域沙盒）|
    * read-only（只读档位）。与 dsh-sandbox 的档位契约一一对应。
@@ -67,8 +82,8 @@ export interface Config extends LocalConfig {
 }
 
 /** The shape after schemastery applied the defaults (optional fields keep their undefined). */
-type ResolvedConfig = Required<Omit<Config, 'cwd' | 'termuxVersion' | 'extraPath' | 'writeMode' | 'workspaceRoot' | 'sharedDirs'>> &
-  Pick<Config, 'cwd' | 'termuxVersion' | 'extraPath' | 'writeMode' | 'workspaceRoot' | 'sharedDirs'>
+type ResolvedConfig = Required<Omit<Config, 'cwd' | 'termuxVersion' | 'extraPath' | 'extraLibDirs' | 'tmpDir' | 'writeMode' | 'workspaceRoot' | 'sharedDirs'>> &
+  Pick<Config, 'cwd' | 'termuxVersion' | 'extraPath' | 'extraLibDirs' | 'tmpDir' | 'writeMode' | 'workspaceRoot' | 'sharedDirs'>
 
 /** Result of the environment probe, for diagnostics/UI panels. */
 export interface ProbeResult {
@@ -98,6 +113,8 @@ export class TermuxBashExecutor extends LocalBashExecutor {
   private readonly home: string
   private readonly termuxVersion: string
   private readonly extraPath: readonly string[]
+  private readonly extraLibDirs: readonly string[]
+  private readonly tmpDir?: string
   private readonly writeMode: SandboxMode
   private readonly workspaceRoot?: string
   private readonly sharedDirs: readonly string[]
@@ -115,6 +132,8 @@ export class TermuxBashExecutor extends LocalBashExecutor {
     this.home = entry.home
     this.termuxVersion = entry.termuxVersion ?? '0.118.3'
     this.extraPath = entry.extraPath ?? []
+    this.extraLibDirs = entry.extraLibDirs ?? []
+    this.tmpDir = entry.tmpDir
     const mode = entry.writeMode ?? 'workspace-write'
     if (!['workspace-write', 'danger-full-access', 'read-only'].includes(mode)) {
       throw new Error(`shell-termux: invalid writeMode '${String(mode)}' (workspace-write | danger-full-access | read-only)`)
@@ -144,13 +163,24 @@ export class TermuxBashExecutor extends LocalBashExecutor {
    * the fence instead of silently assuming unlimited writes.
    */
   private termuxEnv(): Record<string, string> {
+    const libs = [`${this.prefix}/lib`, ...this.extraLibDirs].join(':')
     return {
       PATH: [...this.extraPath, `${this.prefix}/bin`, '/system/bin'].join(':'),
-      LD_LIBRARY_PATH: `${this.prefix}/lib`,
+      LD_LIBRARY_PATH: libs,
       HOME: this.home,
       PREFIX: this.prefix,
       TERMUX_VERSION: this.termuxVersion,
       SHELL: this.bashPath,
+      // Temp-dir honesty: TMPDIR for normal tools, JAVA_TOOL_OPTIONS for the
+      // JVMs that ignore it (openjdk compile-time tmpdir, AGENTS.md 坑39).
+      ...this.tmpDir
+        ? {
+            TMPDIR: this.tmpDir,
+            TMP: this.tmpDir,
+            TEMP: this.tmpDir,
+            JAVA_TOOL_OPTIONS: `-Duser.home=${this.home} -Djava.io.tmpdir=${this.tmpDir}`,
+          }
+        : {},
       DSH_WRITE_MODE: this.writeMode,
       ...this.workspaceRoot ? { DSH_WORKSPACE: this.workspaceRoot } : {},
       DSH_SHARED_DIRS: this.sharedDirs.join(':'),

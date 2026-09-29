@@ -1,0 +1,11 @@
+{
+  "name": "@dsh-android/dsh-android-backup",
+  "version": "1.0.0",
+  "description": "Session & config backup/restore with DSHA BackupScope four-tier semantics (0.13.3 P2)",
+  "main": "lib/index.js",
+  "type": "module",
+  "dependencies": {},
+  "scripts": {
+    "build": "node ../../scripts/build-plugin.mjs backup"
+  }
+}
