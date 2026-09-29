@@ -13,9 +13,9 @@ android {
     // targetSdk 34: Android 15+ forbids exec of app-data ELF for targetSdk 35+
     targetSdk = 34
     // Seagull DevStudio fork: version bumped from upstream 0.13.2-preview.
-    versionCode = 29
+    versionCode = 30
     val snapshotSuffix = providers.gradleProperty("versionNameSuffix").getOrElse("")
-    versionName = "0.13.3-seagull" + snapshotSuffix
+    versionName = "0.13.4-seagull" + snapshotSuffix
     buildConfigField("String", "TERMUX_VERSION", "\"0.118.3\"")
 
     ndk {

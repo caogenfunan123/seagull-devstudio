@@ -114,6 +114,91 @@ for (const dir of ['sessions', 'storages', 'attachments', 'llm-deepseek']) {
 wsl(`find "${wslPath(DH)}" -name '*.map' -delete 2>/dev/null || true`)
 const U = join(STAGE, 'root', 'usr')
 
+// ── 0e. 引擎升级 overlay（D engine-upgrade）：base 引擎 0.1.1-rc.2 → 目标版本逐包覆盖 ──
+// 机制（对齐 DSHA 的 dsh-runtime 思路）：设备基座继承旧引擎树（0.1.1-rc.2），构建期按
+// scripts/engine-overlay.json 登记表（从开源 npm 生成，见 gen-engine-overlay.mjs）逐包拉 tgz
+// 覆盖进 stage 的引擎 node_modules。数据面：
+//   rootPackage = dsh 根包本体（lib/bin.js + package.json；整树宿主，只换 lib 不动 node_modules）
+//   packages    = @deepseek-ai 域逐包覆盖（含 cordis/schemastery 独立版本线）
+//   vendorTop   = 顶层新增第三方闭包缺口
+//   keepUnpublished = 未随目标线重发布包（dsh-client-runtime 峰顶 0.1.1-rc.2，树内保留旧版）
+// tgz 经 npm 镜像链拉取 + sha512 校验，缓存 .deploy-tmp/engine-overlay/（幂等）。
+{
+  const OVERLAY = JSON.parse(readFileSync(join(ROOT, 'scripts', 'engine-overlay.json'), 'utf8'))
+  const ENGINE_ROOT_STAGE = join(U, 'lib/node_modules/@deepseek-ai/dsh')
+  const ENGINE_NM_STAGE = join(ENGINE_ROOT_STAGE, 'node_modules')
+  const ENGINE_TOP_STAGE = join(U, 'lib/node_modules/@deepseek-ai')
+  const OVERLAY_CACHE = join(ROOT, '.deploy-tmp', 'engine-overlay')
+  const NPM_MIRRORS = ['https://registry.npmjs.org', 'https://registry.npmmirror.com']
+  log(`引擎 overlay：${OVERLAY.engineVersion} 逐包覆盖…`)
+  let overlayOk = 0
+  const overlayTgz = async (name, version) => {
+    const dest = join(OVERLAY_CACHE, `${name.replace('@', '').replace('/', '-')}-${version}.tgz`)
+    if (existsSync(dest)) return dest
+    mkdirSync(OVERLAY_CACHE, { recursive: true })
+    let meta = null
+    for (const m of NPM_MIRRORS) {
+      try {
+        const r = await fetch(`${m}/${name}`, { signal: AbortSignal.timeout(30000) })
+        if (!r.ok) continue
+        meta = await r.json()
+        break
+      } catch { /* 下一镜像 */ }
+    }
+    const dist = meta?.versions?.[version]?.dist
+    if (!dist) throw new Error(`overlay 元数据不可得: ${name}@${version}`)
+    const buf = Buffer.from(await (await fetch(dist.tarball, { signal: AbortSignal.timeout(300000) })).arrayBuffer())
+    if (dist.sha512 && createHash('sha512').update(buf).digest('base64') !== dist.sha512) {
+      throw new Error(`overlay sha512 不匹配: ${name}@${version}`)
+    }
+    writeFileSync(dest, buf)
+    return dest
+  }
+  const overlayPkgDir = (name, base = ENGINE_NM_STAGE) =>
+    name.startsWith('@') ? join(base, name.split('/')[0], name.split('/')[1]) : join(base, name)
+  // 整目录替换 + 保留旧包内嵌套 node_modules（npm publish 不含 node_modules，直接 rm 会连带删掉解析出的嵌套依赖）
+  const overlayExtract = async (name, version, targetDir) => {
+    const tgz = await overlayTgz(name, version)
+    const oldNm = join(targetDir, 'node_modules')
+    const savedNm = targetDir + '.__nm_saved'
+    if (existsSync(oldNm)) {
+      wsl(`rm -rf "${wslPath(savedNm)}" && mv "${wslPath(oldNm)}" "${wslPath(savedNm)}"`)
+    }
+    wsl(`rm -rf "${wslPath(targetDir)}" && mkdir -p "${wslPath(targetDir)}" && tar -xzf "${wslPath(tgz)}" -C "${wslPath(targetDir)}" --strip-components=1 && chmod -R u+rwX "${wslPath(targetDir)}"`)
+    if (existsSync(savedNm)) {
+      wsl(`mkdir -p "${wslPath(oldNm)}" && (mv "${wslPath(savedNm)}"/* "${wslPath(oldNm)}"/ 2>/dev/null || true) && rm -rf "${wslPath(savedNm)}"`)
+    }
+    overlayOk++
+  }
+  try {
+    // packages 与 vendorTop 覆盖进引擎 node_modules 顶层（@deepseek-ai/dsh/node_modules/）
+    const allTop = { ...(OVERLAY.packages ?? {}), ...(OVERLAY.vendorTop ?? {}) }
+    for (const [name, version] of Object.entries(allTop)) {
+      await overlayExtract(name, version, overlayPkgDir(name))
+    }
+    log(`  engine node_modules 覆盖: ${overlayOk}`)
+    // 根包本体：只换 lib/ 与 package.json（node_modules 子树 = 全引擎依赖，绝不可动）
+    const root = OVERLAY.rootPackage
+    const tgz = await overlayTgz(root.name, root.version)
+    wsl(`rm -rf "${wslPath(join(ENGINE_ROOT_STAGE, 'lib'))}" "${wslPath(join(ENGINE_ROOT_STAGE, 'README.md'))}" 2>/dev/null || true; tar -xzf "${wslPath(tgz)}" -C "${wslPath(ENGINE_ROOT_STAGE)}" --strip-components=1`)
+    log(`  rootPackage: ${root.name}@${root.version}`)
+    const pj = JSON.parse(readFileSync(join(ENGINE_ROOT_STAGE, 'package.json'), 'utf8'))
+    if (pj.version !== OVERLAY.engineVersion) throw new Error(`根包版本 ${pj.version} != 登记表 ${OVERLAY.engineVersion}`)
+    log(`引擎 overlay 完成（引擎树 @ ${pj.version}）`)
+  } catch (e) {
+    console.error(`[引擎 overlay 失败——快照不可发布] ${e?.stack ?? String(e)}`)
+    process.exit(1)
+  }
+  // keepUnpublished 断言：登记表内包必须仍在树内（防未来误删）
+  for (const entry of OVERLAY.keepUnpublished ?? []) {
+    const name = entry.replace(/ \(.+\)$/, '')
+    if (!existsSync(join(ENGINE_TOP_STAGE, name.split('/')[1] ?? name))) {
+      console.error(`[引擎 overlay 断言失败] keepUnpublished 包不在树内: ${name}`)
+      process.exit(1)
+    }
+  }
+}
+
 // ── 1. Termux 索引（镜像回退链 + 404/超时快速失败）──
 async function fetchMirror(path, timeoutMs = 20000) {
   let lastErr

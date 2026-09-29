@@ -148,4 +148,4 @@ jobs:
           body: |
             自动构建产物（Seagull DevStudio fork，arm64）。
             提交：${{ github.sha }}
-          files: out/v0.13.3-seagull/*.apk
+          files: out/v0.13.4-seagull/*.apk
