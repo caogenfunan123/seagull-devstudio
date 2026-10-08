@@ -84,6 +84,12 @@ class OverlayService : Service() {
   override fun onDestroy() {
     if (instance === this) instance = null
     watcher?.stopWatching()
+    // 2026-10 复盘修复：probe 轮询 Runnable 原只由 hidePanel 清理——服务销毁路径
+    // （通知栏停止/系统回收）漏停，onDestroy 后 probeEngine 仍每 10s 起线程 POST，
+    // 服务实例已死而轮询不亡。统一在此强停。
+    probeHandle?.let { main.removeCallbacks(it) }
+    probeHandle = null
+    main.removeCallbacksAndMessages(null)
     // 避让帧清零（页面恢复全宽）
     frameConsumer?.invoke("var b=document.body||document.documentElement;b.style.paddingRight='0px';b.style.paddingBottom='0px';true;")
     removeWindow(ballView); ballView = null

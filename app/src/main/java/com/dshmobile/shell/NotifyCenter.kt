@@ -41,8 +41,10 @@ object NotifyCenter {
     prefs(context).edit().putBoolean("cat." + category, value).apply()
   }
 
-  private val lastAt = mutableMapOf<String, Long>()
-  private val lastCount = mutableMapOf<String, Int>()
+  // 2026-10 复盘修复：notify 从 WatchdogV2 探活线程与 UI 线程双路调用，
+  // 普通 mutableMapOf 并发写有 ConcurrentModificationException/脏读风险。
+  private val lastAt = java.util.concurrent.ConcurrentHashMap<String, Long>()
+  private val lastCount = java.util.concurrent.ConcurrentHashMap<String, Int>()
 
   fun notify(context: Context, category: String, title: String, text: String, target: String? = null) {
     val app = context.applicationContext

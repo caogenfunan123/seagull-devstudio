@@ -690,7 +690,9 @@ class MainActivity : ComponentActivity() {
       themeRetryRunnable?.let { webView.removeCallbacks(it) }
       webView.destroy()
     }
-    engineManager.stopEngine()
+    // 引擎生命周期归 EngineService（前台服务）与 shutdownToGuide 显式关闭管理：
+    // onDestroy 不再 stopEngine——Activity 因配置变更/进程内重建销毁时引擎必须存活
+    // （服务还要继续跑），且 stopEngine 重置冷却窗会让冷启动保护失效（2026-10 复盘）。
   }
 
   override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {

@@ -97,3 +97,48 @@
   异步结果经 `window.__dshBridge.onDirectoryPicked(callbackId, path)`。
 - 工具资产装配：`EngineManager.extractToolAssets()` 解 `assets/tools/*` 与 `ubuntu-rootfs.tar.xz`
   到 `usr/share` / `home/.dsh/ubuntu-rootfs`（含 `proot-entry.sh`）；幂等以 `bin/bash` 为最硬落点。
+
+## 五、第二轮全量复盘与修复记录（2026-10-08，提交 d0e4b9c 前）
+
+三路并行复审（Kotlin 壳层 23 文件 / 插件 11 包 / 构建链脚本）共发现 2 项 P0、12 项 P1、
+17 项 P2。已修清单（按严重度）：
+
+### P0（必修）
+
+| # | 位置 | 问题 | 修复 |
+|---|---|---|---|
+| P0-1 | `EngineManager.kt` | `engineProcess` 是实例字段，而 MainActivity 与 EngineService 各 new 一个 EngineManager——服务侧看门狗的 `engineProcessAlive()` 永远拿不到 Activity 侧 spawn 的引擎，冷启动 20-45s 端口未监听期间误判「进程已死」→ 绕过冷却窗 kill 重启，且正常冷启动即触发 UndoGate 自动回退（用户观感：配置被回滚、引擎起不来） | 字段提升 companion `@Volatile var engineProcess`，全部 7 处引用限定为 `EngineManager.engineProcess`，双实例事实一致 |
+| P0-2 | `build-apk-013.ps1:15` | `$pluginDirs` 仅 7 项，漏挂全部 7 个 Seagull 插件（seagull/root-ops/dev-tools/apk-tools/tool-installer/disk-maintainer/backup）——本地 Windows 构建产物静默缺失 Seagull 全部能力，与 CI 路径 `build-apk.mjs` 不对称 | 补齐 7 项 + 新增插件 build/校验段（缺 `lib/index.js` 即现场 `npm run build`，失败即拒打包） |
+
+### P1（已修）
+
+| # | 位置 | 问题 | 修复 |
+|---|---|---|---|
+| P1-1 | `MainActivity.kt:693` | `onDestroy` 调 `stopEngine()`：Activity 因配置变更/进程内重建销毁时引擎被杀，且重置 90s 冷却窗 | 删除该调用（引擎保活归 EngineService/shutdownToGuide），注释说明 |
+| P1-2 | `EngineManager.stopEngine` | 仅 `destroy()` 无 waitFor——SIGTERM 未退即返回，调用方误以为已停；孤儿进程无兜底 | 补 `waitFor(3s)` + `destroyForcibly` + `waitFor(2s)`，复用提取出的 `killOrphanEngineProcesses()` |
+| P1-3 | `tool-installer/src/index.js:154` | 解压走 `tar -xzf/-xJf`——快照 tar.real 的压缩器子进程 exec 恒失败（坑 49），L2 工具（radare2/rizin）在线安装整体失效 | 两步解压：`.tar.gz` 走 node:zlib 流式 gunzip、`.tar.xz` 走独立 `xz -dc`，统一 `tar -xf` 裸包（对齐 backup 插件修复模式） |
+| P1-4 | `manage/src/ui-tree.ts:163` | `byOrig` 只按原始 XML 路径键注册，而 `findActionableAncestor` 收到的是重编号 `n{i}` → 恒 miss →「目标不可点时回退可点击祖先」100% 失效 | 同一 entry 双键注册（原路径 + 重编号别名），父链仍按 parentOrig 走 |
+| P1-5 | `tool-installer downloadFile` | 无超时（镜像挂起时任务永驻 downloading）+ WriteStream 无 error 监听（磁盘满时 Promise 永不 settle）+ 重定向无上限 | 120s 超时、`file.on('error')` 统一 fail 清残、最多 5 次重定向 |
+
+### P2（已修）
+
+| # | 位置 | 问题 | 修复 |
+|---|---|---|---|
+| P2-1 | `FileIncoming.kt` | `File.delete()` 对非空目录恒 false——TTL sweep 与 cleanupTmp 遇目录静默残留 | 新增 `deleteRecursively`（对齐 deleteForOverwrite 语义：软链不跟随、目录逆序递归） |
+| P2-2 | `backup/src/index.js:145` | `preRestoreSnapshot` 的 `_restored-from.json` 写入时 `dir/stamp` 目录可能不存在（scope 全 skip/失败时循环不建）→ ENOENT 把恢复流程抛死 | 写入前 `mkdirSync(join(dir, stamp), { recursive: true })` 兜底 |
+| P2-3 | `bridge AdbAuthSection.tsx:281` | 旧壳 boolean 纪元兼容方向写反：`j===null` 时不分 `raw===true/false` 一律报失败——配对着也误报 | `raw===true` 按旧语义成功提示刷新确认；`raw===false` 才报失败 |
+| P2-4 | `file-open/src/index.ts:352` | `clean` 端点是破坏性操作但不校验 method——任何 GET（页面预取/扫描器）都会清空临时工作区 | 仅放行 POST，其余 405 |
+| P2-5 | `file-open/src/index.ts:339` | claim 端 `rmSync(target)` 无 recursive——条目是目录时静默失败，下次 claim 重复弹文件 | 补 `{ recursive: true, force: true }` |
+| P2-6 | `dev-tools/src/index.js:81` | `await stat(bash)` 在 access 的 try 外——access 与 stat 之间竞态/软链断裂会抛未捕获异常崩掉工具 | 合并进同一 try，如实转 not-present 语义 |
+| P2-7 | `linux-env/src/index.ts:86` | `profilePatch` 字段 readText 缺失返回 undefined，而 output.schema 声明 string——undefined 成员被引擎 lossless 拒收（坑 34 同类） | `?? ''` 兜底 |
+| P2-8 | `disk-maintainer/src/index.js` | 注释声称 lstat 语义实际用 statSync（跟随软链）——目录环重复计数、软链目标重复统计 | 全部 6 处改 `lstatSync` |
+| P2-9 | `NotifyCenter.kt:44` | `lastAt/lastCount` 普通 map，notify 从 WatchdogV2 探活线程与 UI 线程双路调用——并发写有 CME/脏读风险 | 改 `ConcurrentHashMap` |
+| P2-10 | `OverlayService.kt:84` | probe 轮询 Runnable 只由 hidePanel 清理，onDestroy 路径（通知栏停止/系统回收）漏停——服务已死而 10s 轮询不亡 | onDestroy 补 removeCallbacks + `removeCallbacksAndMessages(null)` |
+
+### 未修（记录在案，按发布节奏处理）
+
+- root-ops 10 个工具无 `gateFor` 会话门控（仅 system-prompt 提示按档位条件注入；执行面任何档位可调 `su -c`）——涉及授权模型调整，需产品决策后与 AdbState 三道门统一。
+- UpdateManager 下载限流为事后校验、swap 前不杀引擎、pending 标记写入晚——0.13.1 既有行为，真机回归确认无实际事故后再说。
+- AdbState.ensureAdbServer 在 synchronized 内 `readText` 先于 `waitFor`（线程阻塞风险）——冷启动路径已在 F2 修复中缓解，改动需真机验证。
+- 插件层 P2 余项（uiCache 单槽跨会话、ui-tree 闭标签误判、tarRestore 成员类型不校验、gunzipSync 全内存、probeAllowlist denylist 语义、审计滚动非原子等）——均有明确修法，不影响主链路正确性。
+

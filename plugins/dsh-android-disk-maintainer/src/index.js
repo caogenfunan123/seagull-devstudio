@@ -16,17 +16,17 @@
  * 触发：挂载后延迟 60s 跑一次（避开引擎启动高峰），此后每 6h 一次；
  * 定时器经 ctx.effect 持有，插件卸载即清理。维护日志写 .dsh/log/maintain.log。
  */
-import { readdirSync, statSync, existsSync, rmSync, mkdirSync, appendFileSync } from 'node:fs';
+import { readdirSync, lstatSync, existsSync, rmSync, mkdirSync, appendFileSync } from 'node:fs';
 import { join, basename } from 'node:path';
 import { defineTool } from '@deepseek-ai/dsh-tools';
 
 export const name = 'dsh-android-disk-maintainer';
 export const inject = ['tools'];
 
-/** 单文件/目录递归字节数（lstat 语义：软链只算链接本身） */
+/** 单文件/目录递归字节数（lstat 语义：软链只算链接本身，防目录环重复计数） */
 function sizeOf(p) {
   let st;
-  try { st = statSync(p); } catch { return 0; }
+  try { st = lstatSync(p); } catch { return 0; }
   if (!st.isDirectory()) return st.size;
   let total = 0;
   try {
@@ -43,7 +43,7 @@ function dirStats(p) {
   for (const e of readdirSync(p)) {
     const full = join(p, e);
     let st;
-    try { st = statSync(full); } catch { continue; }
+    try { st = lstatSync(full); } catch { continue; }
     if (st.isDirectory()) {
       const b = sizeOf(full);
       bytes += b;
@@ -105,7 +105,7 @@ function runMaintenance(policy, dryRun) {
     try {
       files = readdirSync(fetchedDir).map((n) => {
         const full = join(fetchedDir, n);
-        const st = statSync(full);
+        const st = lstatSync(full);
         return { path: full, mtime: st.mtimeMs, size: st.size };
       });
     } catch { /* 不可读跳过 */ }
@@ -131,7 +131,7 @@ function runMaintenance(policy, dryRun) {
     try {
       victims = readdirSync(tmpDir)
         .map((n) => join(tmpDir, n))
-        .filter((p) => { try { return now - statSync(p).mtimeMs > policy.tmpMaxAgeDays * DAY_MS; } catch { return false; } });
+        .filter((p) => { try { return now - lstatSync(p).mtimeMs > policy.tmpMaxAgeDays * DAY_MS; } catch { return false; } });
     } catch { /* 不可读跳过 */ }
     let freed = 0;
     for (const v of victims) {
@@ -148,8 +148,8 @@ function runMaintenance(policy, dryRun) {
     try {
       dirs = readdirSync(sessionsDir)
         .map((n) => join(sessionsDir, n))
-        .filter((p) => { try { return statSync(p).isDirectory(); } catch { return false; } })
-        .map((p) => ({ path: p, mtime: statSync(p).mtimeMs }))
+        .filter((p) => { try { return lstatSync(p).isDirectory(); } catch { return false; } })
+        .map((p) => ({ path: p, mtime: lstatSync(p).mtimeMs }))
         .sort((a, b) => b.mtime - a.mtime);
     } catch { /* 不可读跳过 */ }
     const keep = dirs.slice(0, policy.sessionKeep);

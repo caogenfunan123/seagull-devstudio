@@ -7,12 +7,13 @@
  * C 方案修复 (2026-09-01)：对齐 dsh-android-bridge 成功模式——
  *   inject 声明 tools 硬依赖 + defineTool 包装工具，修复 ctx.get('tools') 静默 undefined。
  */
-import { mkdirSync, existsSync, createWriteStream, createReadStream, writeFileSync } from 'node:fs';
+import { mkdirSync, existsSync, createWriteStream, createReadStream, writeFileSync, unlinkSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import https from 'node:https';
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createHash } from 'node:crypto';
+import { createGunzip } from 'node:zlib';
 import { defineTool } from '@deepseek-ai/dsh-tools';
 
 const execFileAsync = promisify(execFile);
@@ -63,18 +64,44 @@ const TOOL_REGISTRY = {
   },
 };
 
-function downloadFile(url, dest, onProgress) {
+const DOWNLOAD_TIMEOUT_MS = 120_000;
+const MAX_REDIRECTS = 5;
+
+function downloadFile(url, dest, onProgress, redirects = 0) {
   return new Promise((resolve, reject) => {
     mkdirSync(dirname(dest), { recursive: true });
     const file = createWriteStream(dest);
+    let settled = false;
+    const fail = (err) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      // 写盘错误（磁盘满等）旧实现无监听 → Promise 永不 settle，任务卡死 downloading
+      file.destroy();
+      try { unlinkSync(dest); } catch {}
+      reject(err);
+    };
+    const ok = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(dest);
+    };
+    // 无超时的 https.get：镜像挂起时旧实现永远 pending（tool_install 任务永驻 downloading）
+    const timer = setTimeout(() => fail(new Error('下载超时（' + DOWNLOAD_TIMEOUT_MS / 1000 + 's）: ' + url)), DOWNLOAD_TIMEOUT_MS);
+    file.on('error', fail);
     https.get(url, { headers: { 'User-Agent': 'Seagull-DevStudio/1.0' } }, (res) => {
       if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+        res.resume();
         file.close();
-        return downloadFile(res.headers.location, dest, onProgress).then(resolve, reject);
+        if (redirects >= MAX_REDIRECTS) return fail(new Error('重定向超过 ' + MAX_REDIRECTS + ' 次: ' + url));
+        clearTimeout(timer);
+        settled = true;
+        return downloadFile(res.headers.location, dest, onProgress, redirects + 1).then(resolve, reject);
       }
       if (res.statusCode !== 200) {
-        file.close();
-        return reject(new Error('HTTP ' + res.statusCode + ' on ' + url));
+        res.resume();
+        return fail(new Error('HTTP ' + res.statusCode + ' on ' + url));
       }
       const total = Number(res.headers['content-length']) || null;
       let received = 0;
@@ -82,9 +109,10 @@ function downloadFile(url, dest, onProgress) {
         received += chunk.length;
         if (onProgress) onProgress(received, total);
       });
+      res.on('error', fail);
       res.pipe(file);
-      file.on('finish', () => file.close(() => resolve(dest)));
-    }).on('error', (err) => { file.close(); reject(err); });
+      file.on('finish', () => file.close(() => ok()));
+    }).on('error', fail);
   });
 }
 
@@ -144,23 +172,67 @@ function archiveKind(source) {
 }
 
 /**
- * 解压下载的归档到 destDir。tar.* 用 tar（快照/基座必备），zip 用 unzip。
+ * 解压下载的归档到 destDir（2026-10 坑 49 修复：压缩层拆两步，绕开 tar 内部子进程）。
+ * 快照内 GNU tar 是 sh 包装（exec tar.real），tar.real 的 -z/-J 会 fork/exec 压缩器
+ * 子进程且该 exec 恒失败（'gzip: Cannot exec'，与 PATH/LD_PRELOAD 无关；裸 tar -cf
+ * 与独立 gzip/xz 实测均正常）。故：
+ *   .tar.gz → node:zlib 流式解成裸 .tar
+ *   .tar.xz → 独立 xz -dc 流式解成裸 .tar
+ *   .zip    → unzip
+ * 统一再 tar -xf 裸包解包（--strip-components 剥离开源安装器前缀）。
  * @param strip 剥离前缀层数（radare2/rizin 官方 android 资产带 data/data/<installer>/ 前缀）。
  */
 async function extractArchive(file, destDir, kind, strip) {
   mkdirSync(destDir, { recursive: true });
-  const stripArg = strip > 0 ? `--strip-components=${strip}` : null;
-  let cmd; let args;
-  if (kind === 'targz') { cmd = 'tar'; args = [stripArg, '-xzf', file, '-C', destDir].filter(Boolean); }
-  else if (kind === 'tarxz') { cmd = 'tar'; args = [stripArg, '-xJf', file, '-C', destDir].filter(Boolean); }
-  else if (kind === 'zip') { cmd = 'unzip'; args = ['-q', '-o', file, '-d', destDir]; }
-  else return { ok: false, error: '不支持的归档类型: ' + kind };
+  const stripArgs = strip > 0 ? [`--strip-components=${strip}`] : [];
+  let plainTar = null;
   try {
-    await execFileAsync(cmd, args, { timeout: 300000, maxBuffer: 16 * 1024 * 1024 });
-    return { ok: true };
+    if (kind === 'targz' || kind === 'tarxz') {
+      plainTar = file.replace(/\.(tar\.gz|tgz|tar\.xz)$/, '') + '.plain.tar';
+      if (kind === 'targz') await gunzipToFile(file, plainTar);
+      else await xzToFile(file, plainTar);
+      await execFileAsync('tar', [...stripArgs, '-xf', plainTar, '-C', destDir], { timeout: 300000, maxBuffer: 16 * 1024 * 1024 });
+      return { ok: true };
+    }
+    if (kind === 'zip') {
+      await execFileAsync('unzip', ['-q', '-o', file, '-d', destDir], { timeout: 300000, maxBuffer: 16 * 1024 * 1024 });
+      return { ok: true };
+    }
+    return { ok: false, error: '不支持的归档类型: ' + kind };
   } catch (err) {
-    return { ok: false, error: '解压失败（' + cmd + '）：' + err.message };
+    return { ok: false, error: '解压失败（' + kind + '）：' + err.message };
+  } finally {
+    if (plainTar) { try { unlinkSync(plainTar); } catch {} }
   }
+}
+
+/** gzip → 裸 tar 文件（node:zlib 流式，引擎进程内零外部依赖）。 */
+function gunzipToFile(src, dest) {
+  return new Promise((resolve, reject) => {
+    createReadStream(src).on('error', reject)
+      .pipe(createGunzip()).on('error', reject)
+      .pipe(createWriteStream(dest)).on('error', reject).on('finish', resolve);
+  });
+}
+
+/** xz → 裸 tar 文件（独立 xz -dc 流式；xz 是独立二进制，不经 tar 的压缩器子进程）。 */
+function xzToFile(src, dest) {
+  return new Promise((resolve, reject) => {
+    const p = spawn('xz', ['-dc', src], { stdio: ['ignore', 'pipe', 'pipe'] });
+    const errChunks = [];
+    let settled = false;
+    const done = (fn) => (arg) => { if (!settled) { settled = true; fn(arg); } };
+    const ok = done(() => resolve());
+    const fail = done((err) => reject(err));
+    p.stderr.on('data', (d) => errChunks.push(d));
+    p.on('error', fail);
+    p.on('close', (code) => {
+      if (code === 0) ok();
+      else fail(new Error('xz 退出码 ' + code + ': ' + Buffer.concat(errChunks).toString().slice(0, 300)));
+    });
+    p.stdout.on('error', fail)
+      .pipe(createWriteStream(dest)).on('error', fail).on('finish', ok);
+  });
 }
 
 function renderText(_a, v) {

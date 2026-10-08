@@ -83,7 +83,9 @@ function recipeExport(): Record<string, unknown> {
     version: '0.13.0',
     env,
     dpkgPackages: dpkgList,
-    profilePatch: readText(join(profile, 'cordis.patch.yml')),
+    // 2026-10 复盘修复：readText 缺失返回 undefined，而 output.schema 声明 string——
+    // undefined 成员会被引擎 lossless 序列化拒收（坑 34 同类）。空串兜底。
+    profilePatch: readText(join(profile, 'cordis.patch.yml')) ?? '',
     sharedDirs: envFacts().sharedDirs,
     // 注意：.credentials.yaml/.env 的真实值绝不进入配方
     sensitiveExcluded: ['.credentials.yaml', '.env'],

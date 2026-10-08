@@ -161,6 +161,12 @@ export function pruneNodes(
     const entry = { n: { ...n, id: 'n' + i, parentId: '' }, parentOrig: n.parentId }
     byId.set('n' + i, entry)
     byOrig.set(n.id, entry)
+    // 重编号 id 别名（2026-10 复盘修复）：findActionableAncestor 收到的 node.id
+    // 是重编号后的 n{i}，而 byOrig 此前只按原始 XML 路径键注册 → 恒 miss →
+    // 「目标不可点时回退可点击祖先」100% 失效。同一 entry 双键注册，
+    // 父链仍按原始路径（parentOrig）走，语义不变。
+    const renum = 'n' + i
+    if (!byOrig.has(renum)) byOrig.set(renum, entry)
   })
   return { nodes: kept.map((n, i) => ({ ...n, id: 'n' + i, parentId: '' })), rawCount, byId, byOrig }
 }

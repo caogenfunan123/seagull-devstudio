@@ -272,14 +272,22 @@ export function AdbAuthSection(_props: AdbAuthSectionProps) {
       // F3 结构化结果：{ok, reason, message}。同步握手会阻塞本页最长约一分钟——
       // 页面冻结属预期，不是卡死；提示常驻文案已说明。
       let j: PairOutcome | null = null
+      let raw: unknown = null
       try {
-        const raw = b.setAdbPair(pairCode, p, c)
+        raw = b.setAdbPair(pairCode, p, c)
         j = typeof raw === 'string' && raw.startsWith('{') ? (JSON.parse(raw) as PairOutcome) : null
       } catch {
         /* 保持 j=null → 走笼统失败文案 */
       }
       if (j === null) {
-        // 旧壳兼容（boolean 纪元）：false → 笼统报错；undefined/true 视为旧语义成功（不可静默当败）
+        // 旧壳 boolean 纪元兼容（2026-10 复盘修复方向写反）：raw===true 是旧语义
+        // **成功**，旧实现不分青红皂白 raiseActionError——配对着也误报失败；
+        // raw===false 才是失败。undefined 已在调用前 typeof 检查排除。
+        if (raw === true) {
+          setOkMsg('配对指令已下发（旧版壳兼容路径）；请刷新确认授权状态')
+          await refresh()
+          return
+        }
         raiseActionError('配对失败：请核对 6 位码与端口（无线调试弹窗）')
         return
       }

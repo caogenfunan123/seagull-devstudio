@@ -336,7 +336,9 @@ export function apply(ctx: Context, _config: Record<string, unknown> = {}) {
               res.end(JSON.stringify({ ok: false, error: 'invalid entry path' }))
               return
             }
-            if (existsSync(target)) rmSync(target)
+            // 2026-10 复盘修复：rmSync 无 recursive——队列条目是目录时静默失败，
+            // 下次 claim 又读到同一项（F5 消费端重复弹文件）。
+            if (existsSync(target)) rmSync(target, { recursive: true, force: true })
             res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
             res.end(JSON.stringify({ ok: true }))
           } catch (e) {
@@ -350,7 +352,7 @@ export function apply(ctx: Context, _config: Record<string, unknown> = {}) {
     wsvc.register({
       kind: 'exact',
       path: '/api/android/file-incoming/clean',
-      handler: async (_req: {
+      handler: async (req: {
         method?: string
         on(_e: string, cb: (b: Buffer) => void): void
         destroy(): void
@@ -358,6 +360,13 @@ export function apply(ctx: Context, _config: Record<string, unknown> = {}) {
         writeHead(code: number, headers: Record<string, string>): void
         end(body: string): void
       }) => {
+        // 2026-10 复盘修复：clean 是破坏性操作，旧实现不校验 method——任何来源的
+        // GET（页面预取/扫描器）都会清空临时工作区。仅放行 POST。
+        if (req.method && req.method !== 'POST') {
+          res.writeHead(405, { 'content-type': 'application/json; charset=utf-8' })
+          res.end(JSON.stringify({ ok: false, error: 'method not allowed: use POST' }))
+          return
+        }
         let removed = 0
         try {
           for (const f of readdirSync(tmpWorkspace())) {

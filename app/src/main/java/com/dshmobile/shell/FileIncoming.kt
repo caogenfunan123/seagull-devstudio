@@ -4,6 +4,7 @@ import android.content.Context
 import android.net.Uri
 import java.io.File
 import java.net.URLDecoder
+import java.nio.file.Files
 
 /**
  * 文件直达会话（0.13.0 PRD F5，M3.5）：外部「使用其他应用打开 / 分享」→
@@ -144,6 +145,30 @@ object FileIncoming {
   private const val TTL_MS = 7L * 24 * 60 * 60 * 1000
 
   /**
+   * 递归删除（2026-10 复盘修复）：File.delete() 对非空目录恒返回 false——
+   * sweepExpired/cleanupTmp 旧实现遇到目录静默残留，TTL 窗口形同虚设。
+   * 对齐 SnapshotExtractor.deleteForOverwrite 语义：符号链接/文件直删（不跟随），
+   * 真实目录逆序递归删。
+   */
+  private fun deleteRecursively(f: File): Boolean {
+    return try {
+      if (Files.isSymbolicLink(f) || !f.isDirectory) {
+        Files.deleteIfExists(f.toPath())
+      } else {
+        // 与 SnapshotExtractor.deleteForOverwrite 同模式：逆序 + use 关流。
+        Files.walk(f.toPath()).use { stream ->
+          stream.sorted { a, b -> b.compareTo(a) }.forEach { p ->
+            try { Files.deleteIfExists(p) } catch (_: Exception) {}
+          }
+        }
+      }
+      !f.exists()
+    } catch (_: Exception) {
+      false
+    }
+  }
+
+  /**
    * 定时清理（TTL 7 天）：删除超过保留窗口的临时文件（含子目录）、以及超过窗口的历史会话元数据行。
    * 幂等；在应用启动（onCreate）与每次文件入队前调用——不打扰未过期内容。
    * onTaskRemoved 的 cleanupTmp 仍保留（进程被系统回收时的即时全清礼仪）。
@@ -158,7 +183,7 @@ object FileIncoming {
         if (f.name == ".sessions") continue // 引擎侧队列元数据：由 claim 消费删除
         val last = f.lastModified()
         if (last > 0 && now - last > TTL_MS) {
-          if (f.delete() || !f.exists()) removed++
+          if (deleteRecursively(f) || !f.exists()) removed++
         }
       }
       if (removed > 0) {
@@ -172,7 +197,7 @@ object FileIncoming {
   fun cleanupTmp(context: Context) {
     try {
       val dir = tmpWorkspace(context)
-      dir.listFiles()?.forEach { it.delete() }
+      dir.listFiles()?.forEach { deleteRecursively(it) }
       LogCollector.log("dsh-file-open", "temp workspace cleaned (task removed ritual)")
     } catch (_: Exception) {
     }

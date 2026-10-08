@@ -142,6 +142,9 @@ function preRestoreSnapshot(archivePath) {
       copied.push(rel);
     } catch { /* 单项失败不阻断（恢复仍可退到 tar 本身） */ }
   }
+  // stamp 目录兜底（2026-10 复盘修复）：scope 全部 skip/失败时循环不会建出
+  // dir/stamp 层，writeFileSync 直接 ENOENT 把恢复流程抛死。
+  mkdirSync(join(dir, stamp), { recursive: true });
   writeFileSync(join(dir, stamp, '_restored-from.json'), JSON.stringify({ archive: basename(archivePath), ts: new Date().toISOString(), copied }));
   return { dir: join(dir, stamp), copied: copied.length };
 }

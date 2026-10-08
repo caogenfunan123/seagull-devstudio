@@ -37,7 +37,6 @@ class EngineManager(private val context: Context, private val pickToken: String?
     }
   private val nodeBin = File(usrDir, "bin/node")
   private val dshBin = File(usrDir, "lib/node_modules/@deepseek-ai/dsh/lib/bin.js")
-  private var engineProcess: Process? = null
 
   /** Consecutive healthy probe ticks since the last update swap (update-v2 confirmation state). */
   private var updateHealthTicks = 0
@@ -1030,7 +1029,7 @@ exec "${'$'}PROOT_BIN" --link2symlink --kill-on-exit -0 -r "${'$'}ROOTFS_DIR" -b
       val args = arrayOf(
         nodeBin.absolutePath, "--expose-internals", dshBin.absolutePath, "web", "--port", port.toString(), "--no-open",
       )
-      engineProcess = startWithArgs(args, shellEnv())
+      EngineManager.engineProcess = startWithArgs(args, shellEnv())
       // The cooldown is written only after a real start: failure paths don't consume the window (retry is immediate).
       EngineManager.lastStartAttemptAt = now
       LogCollector.log(TAG, "engine started")
@@ -1088,7 +1087,7 @@ exec "${'$'}PROOT_BIN" --link2symlink --kill-on-exit -0 -r "${'$'}ROOTFS_DIR" -b
 
   /** 0.13.1 W3：最近一次死亡的引擎进程退出码（进程活着或句柄丢失时返回 null）。 */
   fun engineExitInfo(): String? {
-    val held = engineProcess ?: return null
+    val held = EngineManager.engineProcess ?: return null
     if (held.isAlive) return null
     return try {
       "exit=" + held.exitValue()
@@ -1212,10 +1211,25 @@ exec "${'$'}PROOT_BIN" --link2symlink --kill-on-exit -0 -r "${'$'}ROOTFS_DIR" -b
     }
   }
 
-  /** Stop the engine process (best-effort). */
+  /** Stop the engine process (best-effort). 仅由用户显式关闭路径调用（shutdownToGuide），
+   *  Activity/服务生命周期销毁不得调用——引擎保活归 EngineService。 */
   fun stopEngine() {
-    engineProcess?.destroy()
-    engineProcess = null
+    val held = EngineManager.engineProcess
+    if (held != null) {
+      try {
+        held.destroy()
+        // SIGTERM 后 node 可能要几秒才退出；不等待直接返回会让调用方误以为已停
+        // （shutdownToGuide 随后 stopService 才彻底）。有界等待 + 强杀兜底。
+        if (!held.waitFor(3, java.util.concurrent.TimeUnit.SECONDS)) {
+          held.destroyForcibly()
+          held.waitFor(2, java.util.concurrent.TimeUnit.SECONDS)
+        }
+      } catch (_: Throwable) {
+      }
+    }
+    EngineManager.engineProcess = null
+    // 进程句柄之外的孤儿（watchdog fork 的）也要收，与 killExistingEngine 兜底同口径。
+    killOrphanEngineProcesses()
     LogCollector.log(TAG, "engine stopped (manual)")
     // Reset the cooldown after a manual stop: returning to the foreground should allow an immediate restart.
     EngineManager.lastStartAttemptAt = 0
@@ -1227,7 +1241,7 @@ exec "${'$'}PROOT_BIN" --link2symlink --kill-on-exit -0 -r "${'$'}ROOTFS_DIR" -b
    * 供 startEngineFlow 的超时语义使用——进程活着就继续等，只有进程死才触发回退。
    */
   fun engineProcessAlive(): Boolean {
-    val held = engineProcess
+    val held = EngineManager.engineProcess
     if (held != null && held.isAlive) return true
     if (held == null) {
       // 句柄丢失（看门狗曾被 fork 或孤儿）：以端口可达性兜底判定。
@@ -1242,7 +1256,7 @@ exec "${'$'}PROOT_BIN" --link2symlink --kill-on-exit -0 -r "${'$'}ROOTFS_DIR" -b
    * 幂等：无残留时零动作。绝不等待超过 5s（不阻塞启动路径）。
    */
   private fun killExistingEngine() {
-    val held = engineProcess
+    val held = EngineManager.engineProcess
     if (held != null) {
       try {
         held.destroy()
@@ -1252,18 +1266,21 @@ exec "${'$'}PROOT_BIN" --link2symlink --kill-on-exit -0 -r "${'$'}ROOTFS_DIR" -b
         }
       } catch (_: Throwable) {
       }
-      engineProcess = null
+      EngineManager.engineProcess = null
     }
-    // 兜底：命中快照 node 的残留进程（`bin.js web` 是该引擎的唯一形态；pnpm/脚本子进程
-    // 不含 bin.js 特征，不会被误杀）。pkill 不可用时静默跳过。
-    // 注：与 UpdateManager 的既有清理（pkill -f bin.js）口径一致。
+    killOrphanEngineProcesses()
+  }
+
+  /**
+   * 兜底终结无句柄的引擎孤儿（2026-10 stopEngine 复用提取）：pkill -f bin.js 不可靠
+   * （vivo 对 linker64 包装进程实测不生效，坑 31），再扫 /proc/<pid>/cmdline 匹配
+   * bin.js 特征 kill -9（排除自身 pid；pnpm/脚本子进程不含 bin.js 特征不会误杀）。
+   */
+  private fun killOrphanEngineProcesses() {
     try {
       Runtime.getRuntime().exec(arrayOf("/system/bin/pkill", "-f", "bin.js")).waitFor()
     } catch (_: Throwable) {
     }
-    // 兜底 2（坑 28/31，2026-10）：pkill -f 在 vivo 等机型对 linker64 包装进程实测不生效，
-    // 孤儿 node 继续占端口 → 新引擎 bind 失败循环。直接扫 /proc/<pid>/cmdline 匹配 bin.js
-    // 特征后 kill -9（linker64 包装进程的 cmdline 同样含完整参数，可命中；排除自身 pid）。
     try {
       val myPid = android.os.Process.myPid()
       File("/proc").listFiles()?.forEach { p ->
@@ -1443,6 +1460,16 @@ exec "${'$'}PROOT_BIN" --link2symlink --kill-on-exit -0 -r "${'$'}ROOTFS_DIR" -b
 
     /** Process-level start CAS: visible across EngineManager instances (double-start race guard). */
     val STARTING = java.util.concurrent.atomic.AtomicBoolean(false)
+
+    /**
+     * 引擎进程句柄（2026-10 复盘修复）：进程级共享而非实例字段。MainActivity 与
+     * EngineService 各自 new EngineManager，旧实现句柄是实例字段——服务侧看门狗的
+     * engineProcessAlive() 永远拿不到 Activity 侧 spawn 的引擎（返回 null 只查端口），
+     * 冷启动 20-45s 端口未监听期间误判「进程已死」→ 绕过冷却窗 kill 重启，且把正常
+     * 冷启动判失败触发 UndoGate 自动回退。共享后所有实例对「引擎活着」事实一致。
+     */
+    @Volatile
+    var engineProcess: Process? = null
 
     /** Last real start time (epoch ms); the watchdog cooldown-window baseline. */
     @Volatile

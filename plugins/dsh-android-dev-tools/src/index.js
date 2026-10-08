@@ -73,12 +73,15 @@ function tools() {
       // 与壳侧 extractToolAssets 幂等落点（bin/bash）对齐。仅 access 根目录会漏判
       // 「目录在但内容未解压」以及软链丢失的残缺装配。
       const bash = `${rootfs}/usr/bin/bash`;
+      let st;
       try {
         await access(bash);
+        // 2026-10 复盘修复：stat 原在 try 外——access 与 stat 之间软链断裂/竞态会抛
+        // 未捕获异常把整个工具执行崩掉。合并进同一 try，如实转为 not-present 语义。
+        st = await stat(bash);
       } catch {
         return { ok: false, present: false, rootfs, message: 'Ubuntu rootfs 未装配（缺 usr/bin/bash）：请确认 APK 内置 rootfs 资产已完整解压到 .dsh/ubuntu-rootfs。' };
       }
-      const st = await stat(bash);
       return { ok: true, present: true, rootfs, bashBytes: st.size };
     },
   });

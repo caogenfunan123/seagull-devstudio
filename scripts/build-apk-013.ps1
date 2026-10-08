@@ -21,7 +21,17 @@ $pluginDirs = @(
     (Join-Path $Root "plugins\dsh-android-bridge"),
     (Join-Path $Root "plugins\dsh-android-manage"),
     (Join-Path $Root "plugins\dsh-android-linux-env"),
-    (Join-Path $Root "plugins\dsh-android-file-open")
+    (Join-Path $Root "plugins\dsh-android-file-open"),
+    # Seagull fork 七件套（2026-10-08 复盘修复：此前 ps1 漏挂 → 本地构建产物缺
+    # seagull persona / root-ops / dev-tools / apk-tools / tool-installer /
+    # disk-maintainer / backup 全部能力，与 build-apk.mjs（CI 路径）不一致）
+    (Join-Path $Root "plugins\dsh-android-seagull"),
+    (Join-Path $Root "plugins\dsh-android-root-ops"),
+    (Join-Path $Root "plugins\dsh-android-dev-tools"),
+    (Join-Path $Root "plugins\dsh-android-apk-tools"),
+    (Join-Path $Root "plugins\dsh-android-tool-installer"),
+    (Join-Path $Root "plugins\dsh-android-disk-maintainer"),
+    (Join-Path $Root "plugins\dsh-android-backup")
 )
 
 foreach ($abi in @('arm64', 'x86_64')) {
@@ -33,6 +43,19 @@ foreach ($abi in @('arm64', 'x86_64')) {
 
     # 1. 插件注入（@dsh-android 专用 + 通用根级包）
     if (-not $SkipInject) {
+        # 插件 build/校验（2026-10-08 复盘修复：ps1 原无此段——本地漏跑 npm run build
+        # 时注入的是陈旧/缺失 lib/，快照静默缺能力，与 build-apk.mjs 的 requires 门禁不对称）
+        foreach ($p in $pluginDirs) {
+            if (-not (Test-Path (Join-Path $p "package.json"))) { Write-Host "缺插件源 $p"; continue }
+            $lib = Join-Path $p "lib\index.js"
+            if (-not (Test-Path $lib)) {
+                Write-Host "== 构建插件（缺 lib/index.js）: $p =="
+                Push-Location $p
+                npm run build 2>&1 | Select-Object -Last 2
+                Pop-Location
+                if (-not (Test-Path $lib)) { Write-Host "插件 build 失败，拒绝打包（$abi）: $p"; exit 1 }
+            }
+        }
         New-Item -ItemType Directory -Force -Path (Join-Path $Root ".deploy-tmp\plugins") | Out-Null
         # undo-savepoint 注入源：vendor/dsh-undo-savepoint（固化移动端裁剪版——
         # 头部只留快照徽章、移除撤销/恢复快捷键行与全局键盘监听，见其 PATCHES.md 差异表）
