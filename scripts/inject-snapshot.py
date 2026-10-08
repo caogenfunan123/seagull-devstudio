@@ -18,8 +18,8 @@ import sys
 import tarfile
 
 PLUGIN_ROOT = "home/.dsh/profiles"
-# scoped 包可一并携带的非 lib 文件（persona.md 由 dsh-android-seagull 读取）
-INJECT_FILES = {"package.json", "persona.md"}
+# scoped 包可一并携带的非 lib 文件（persona.md / persona-core.md 由 dsh-android-seagull 读取）
+INJECT_FILES = {"package.json", "persona.md", "persona-core.md"}
 
 
 def is_injectable(name, pkg_names):
