@@ -378,6 +378,14 @@ export const inject = ['tools'];
  */
 const PROBE_TIMEOUT_MS = 20_000;
 
+/**
+ * 探针 env：**必须继承引擎进程 env**（{...process.env} 模式，对齐 backup 插件的
+ * execEnv——2026-10-08 真机实测四项探针全红全误报的根因）：从零构造 env 会丢掉
+ * termux-exec 三件套（LD_PRELOAD + TERMUX_EXEC__* + TERMUX__PREFIX）与 OPENSSL_CONF，
+ * 导致 shebang 启动器 ENOENT、app-data ELF 直 exec EACCES——工具实际能跑（radare2
+ * 5.9.8 / jadx 1.5.0 / java+apktool 2.9.3 实测），探针却恒报 broken。
+ * 在继承基础上只补探针专用 PATH/LD_LIBRARY_PATH/tmp/JAVA_TOOL_OPTIONS。
+ */
 function probeEnv() {
   const home = process.env.DSH_HOME
     ? join(process.env.DSH_HOME, '..')
@@ -385,16 +393,17 @@ function probeEnv() {
   const dshRoot = process.env.DSH_HOME || '/data/data/com.dsharnessmobile.shell/files/home/.dsh';
   const tmp = join(dshRoot, 'tmp');
   try { mkdirSync(tmp, { recursive: true }); } catch { /* 已在则忽略 */ }
-  return {
-    PATH: [join(USR, 'bin'), join(USR, 'share', 'jadx', 'bin'), join(USR, 'share', 'radare2', 'bin'), '/system/bin'].join(':'),
-    LD_LIBRARY_PATH: [join(USR, 'lib'), join(USR, 'share', 'radare2', 'lib')].join(':'),
-    HOME: home,
-    PREFIX: USR,
-    TMPDIR: tmp,
-    TMP: tmp,
-    TEMP: tmp,
-    JAVA_TOOL_OPTIONS: `-Duser.home=${home} -Djava.io.tmpdir=${tmp}`,
-  };
+  const env = { ...process.env };
+  env.PATH = [join(USR, 'share', 'jadx', 'bin'), join(USR, 'share', 'radare2', 'bin'), env.PATH || join(USR, 'bin')].join(':');
+  env.LD_LIBRARY_PATH = [join(USR, 'lib'), join(USR, 'share', 'radare2', 'lib'), env.LD_LIBRARY_PATH].filter(Boolean).join(':');
+  env.HOME = home;
+  env.PREFIX = USR;
+  env.TERMUX__PREFIX = USR;
+  env.TMPDIR = tmp;
+  env.TMP = tmp;
+  env.TEMP = tmp;
+  env.JAVA_TOOL_OPTIONS = `-Duser.home=${home} -Djava.io.tmpdir=${tmp}`;
+  return env;
 }
 
 /** 注册表条目 → 实际可执行验证命令（落点在场 + 版本可读两关）。 */

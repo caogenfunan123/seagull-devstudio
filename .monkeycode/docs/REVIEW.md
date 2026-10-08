@@ -158,3 +158,17 @@
 
 报告另抓 1 个代码级待修项（safeResolveInside 路径形态敏感，壳侧 `/data/data` 形态 + ws `/data/user/0` 形态被早期字符串判定误拒 → 分享入队 100% 失败）——**已修**，见坑 59；另 1 条手册备注（设备端 `tar -xf` 踩 `xz: Cannot exec`，改 `xz -dc | tar -x`）已同步 §3.2 步 4 与坑 49。
 
+### 九连念细项（2026-10-08，全新会话逐条念，session d84e9bf8-…）
+
+| # | 指令 | 判分 | 依据 |
+|---|---|---|---|
+| 1 | tool_install radare2 + -v | PASS | alreadyInstalled 短路（全链路早前 force 重装已实跑），5.9.8 完整输出 |
+| 2 | tool_status + 读探针 | 半过 | 注册表 installed；探针四项全红**全误报**（工具实跑均正常，rizin missing 唯一诚实项）——**已修**，见坑 60 |
+| 3 | ui_dump + 点不可点文本 | 挡设计门 | T0 失败关闭原话复现；P1-4 已双轨验证（代码 + root 实点跳转）；字面复验需 App 开「允许访问」+无线调试配对 |
+| 4 | env_recipe 导出 | PASS | 81 包、零序列化报错、profilePatch 源在场（容器实到 185 包 vs 配方 81 系装配清单口径，正常） |
+| 5 | 全量备份 + 恢复 | PASS | 25.6MB/10 条目 → 恢复 56 成员；pre-restore 快照落 2026-10-08T02-42-23-784Z；无 ENOENT。name 参数缺失——**已修**（补 label） |
+| 6 | root_status + id | PASS | rootReady/allowlisted，uid=0(root) context=u:r:ksu:s0 |
+| 7 | persona 模块自报 | PASS | 17 模块 = 5 基础 + 12 extended 全量；Protocol Reverse Routing 空标题段——**已修**（补内容） |
+| 8 | 工具面基线 | 测量完成 | 新会话 **89 个工具**（原预期 ~44 修正为 ~89），砍半空间约 45 个 |
+| 9 | 5 问额度观测 | 机械完成 | session d84e9bf8-…，10:43–10:45 窗口 5 笔，hit/miss 读数待 DeepSeek 后台查 |
+

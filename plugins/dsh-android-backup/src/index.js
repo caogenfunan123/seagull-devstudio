@@ -164,11 +164,13 @@ function listArchives() {
 
 function buildService() {
   return {
-    async backup(scope) {
+    async backup(scope, label) {
       if (!SCOPES.includes(scope)) return { ok: false, error: `未知档位 ${scope}（full|sessions|settings|plugins）` };
       const dir = exportDir();
       const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-      const out = join(dir, `seagull-${scope}-${stamp}.tar.gz`);
+      // label 净化：只保留文件名安全字符（防路径注入），空 label 行为不变
+      const tag = (label || '').replace(/[^A-Za-z0-9_-]/g, '').slice(0, 32);
+      const out = join(dir, `seagull-${scope}-${tag ? tag + '-' : ''}${stamp}.tar.gz`);
       try {
         const paths = await tarCreate(scope, out);
         const bytes = statSync(out).size;
@@ -208,9 +210,10 @@ function tools(service) {
       '创建备份归档（tar.gz，落 dshdata/exports/）。档位：full=会话+设置+存储+插件清单 / sessions=仅对话 / settings=仅配置凭据 / plugins=仅插件装配清单。文件名带档位前缀防误恢复。',
     parameters: {
       scope: { type: 'string', required: true, description: '备份档位：full | sessions | settings | plugins', enum: SCOPES },
+      label: { type: 'string', description: '可选备注名（仅保留字母数字_-，最长 32 字符；进文件名便于识别，如 test1）' },
     },
     output: { schema: { type: 'object', additionalProperties: true }, render: renderText },
-    async execute({ scope }) { return service.backup(scope); },
+    async execute({ scope, label }) { return service.backup(scope, label); },
   });
 
   const restoreTool = defineTool({

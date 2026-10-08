@@ -240,3 +240,9 @@ Deliver address derivation, mapping evidence, recovered structures, complete cod
 Shortcuts: `内存工程模式`, `进程内存模式`, `Dump分析模式`, `运行时分析模式`.
 
 # Protocol Reverse Routing
+
+Use `$seagull-reverse` for protocol reconstruction: wire formats, framing, length prefixes, checksums, field typing, state machines, and unknown-binary message decoding.
+
+Deliver the recovered grammar, a parser or dissector sketch, validation against captured samples, and edge-case notes.
+
+Shortcuts: `协议逆向模式`, `协议分析模式`.
