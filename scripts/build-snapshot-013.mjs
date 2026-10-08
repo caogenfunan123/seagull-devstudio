@@ -189,11 +189,17 @@ const U = join(STAGE, 'root', 'usr')
     console.error(`[引擎 overlay 失败——快照不可发布] ${e?.stack ?? String(e)}`)
     process.exit(1)
   }
-  // keepUnpublished 断言：登记表内包必须仍在树内（防未来误删）
+  // keepUnpublished 断言：登记表内包必须仍在树内（防未来误删）。
+  // 落点容错（2026-10-08 CI 实锤修复）：base-usr 把 client-runtime 装在引擎包嵌套
+  // node_modules（dsh/node_modules/@deepseek-ai/<pkg>），旧断言按外层
+  // lib/node_modules/@deepseek-ai/<pkg> 查 → 从源构建恒失败 → 静默走回退下载旧版
+  // 快照冒充（0.1.7 升级后所有 CI APK 引擎退回 0.1.1-rc.2）。嵌套/外层任一在场即放行。
   for (const entry of OVERLAY.keepUnpublished ?? []) {
     const name = entry.replace(/ \(.+\)$/, '')
-    if (!existsSync(join(ENGINE_TOP_STAGE, name.split('/')[1] ?? name))) {
-      console.error(`[引擎 overlay 断言失败] keepUnpublished 包不在树内: ${name}`)
+    const nested = overlayPkgDir(name)
+    const topLevel = join(ENGINE_TOP_STAGE, name.split('/')[1] ?? name)
+    if (!existsSync(nested) && !existsSync(topLevel)) {
+      console.error(`[引擎 overlay 断言失败] keepUnpublished 包不在树内: ${name}（nested=${nested} top=${topLevel}）`)
       process.exit(1)
     }
   }

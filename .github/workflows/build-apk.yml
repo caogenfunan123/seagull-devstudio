@@ -115,7 +115,14 @@ jobs:
             echo "::warning:: 回退下载上游快照版本 ${VER}"
             curl -sL -o ".deploy-tmp/snapshot-013/${{ matrix.abi }}/snapshot.tar.xz" \
               "https://github.com/kelai141/dsh-mobile-apk/releases/download/${VER}/snapshot-${{ matrix.abi }}.tar.xz"
-            test -s ".deploy-tmp/snapshot-013/${{ matrix.abi }}/snapshot.tar.xz" || { echo "快照回退下载失败"; exit 1; }
+            # xz 魔数校验（2026-10-08 实锤修复）：release 不存在时 curl 落盘的是 404 HTML 页，
+            # test -s 非空即放行 → inject-snapshot.py 报 LZMAError 格式错误（根因远离现场）。
+            # 魔数不符即快速失败，杜绝「旧快照/HTML 冒充」进 APK。
+            MAGIC=$(od -An -tx1 -N6 ".deploy-tmp/snapshot-013/${{ matrix.abi }}/snapshot.tar.xz" | tr -d ' \n')
+            if [ "$MAGIC" != "fd377a585a00" ]; then
+              echo "::error:: 回退快照非合法 xz（魔数 $MAGIC，上游 ${VER} 未发布对应快照？）——拒绝用旧快照冒充，从源重建为唯一正确路径"
+              exit 1
+            fi
           fi
 
       - name: 拉取内置工具与 Ubuntu rootfs 资产（CI 自给自足，大文件不入库）
