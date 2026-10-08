@@ -991,14 +991,29 @@ exec "${'$'}PROOT_BIN" --link2symlink --kill-on-exit -0 -r "${'$'}ROOTFS_DIR" -b
     // 实际不可达（探活 down），冷却窗不应阻止重试——旧实现让挂死进程占着引擎端口直到 EADDRINUSE。
     // 同时 startEngine 前必须先终结残留进程：destroy() 仅 SIGTERM，引擎挂死时需 destroyForcibly。
     val withinCooldown = now - EngineManager.lastStartAttemptAt < START_COOLDOWN_MS
-    val engineReachable = try { EngineProbe.check(300).optBoolean("running", false) } catch (_: Exception) { false }
-    if (withinCooldown && engineReachable) {
-      STARTING.set(false)
-      LogCollector.log(TAG, "engine start skipped (cooldown window; engine reachable)")
-      return true
-    }
-    if (withinCooldown && !engineReachable) {
-      LogCollector.log(TAG, "engine start: cooldown bypassed (engine unreachable after " + (now - EngineManager.lastStartAttemptAt) + "ms)")
+    if (withinCooldown) {
+      val engineReachable = try { EngineProbe.check(300).optBoolean("running", false) } catch (_: Exception) { false }
+      if (engineReachable) {
+        STARTING.set(false)
+        LogCollector.log(TAG, "engine start skipped (cooldown window; engine reachable)")
+        return true
+      }
+      // 冷启动保护（2026-10 循环重启修复）：引擎进程活着 = 正在冷启动（20-45s 内探活
+      // 必然失败属正常）——本窗口内绝不 kill 重启。旧实现在冷却窗内只要探活不可达就
+      // 「绕过冷却窗」直接 killExistingEngine，把 5s 前刚 spawn 的引擎掐灭，看门狗下
+      // 一 tick 再来一遍 → 引擎永远无法完成冷启动（用户实测「用久了老是重启卡死」主根因）。
+      if (engineProcessAlive()) {
+        STARTING.set(false)
+        LogCollector.log(TAG, "engine start skipped (cold boot in progress; process alive)")
+        return true
+      }
+      // 进程已死（启动即崩）：崩溃循环限速，避免每 5s 一次的 kill-restart 风暴。
+      if (now - EngineManager.lastStartAttemptAt < CRASH_RETRY_MIN_MS) {
+        STARTING.set(false)
+        LogCollector.log(TAG, "engine start skipped (crash retry throttle)")
+        return true
+      }
+      LogCollector.log(TAG, "engine start: cooldown bypassed (engine process dead " + (now - EngineManager.lastStartAttemptAt) + "ms after last start)")
     }
     return try {
       // 旧进程清理：无论句柄是否还在，先终结残留（引擎挂死/内存里 fork 掉的孤儿）。
@@ -1089,6 +1104,14 @@ exec "${'$'}PROOT_BIN" --link2symlink --kill-on-exit -0 -r "${'$'}ROOTFS_DIR" -b
    * 触发点：spawn 失败 / 进程死亡 / 健康检查超时 / 快照解压失败 / UndoGate 急救。
    */
   fun mirrorDiagnosticsToShared(reason: String) {
+    // 节流（2026-10）：spawn 失败路径会被看门狗每 tick 触发，旧实现每 5s 落一个诊断包
+    // （logcat 400 行/次）→ diagnostics 目录无限膨胀。60s 内只镜像一次。
+    val now = System.currentTimeMillis()
+    if (now - EngineManager.lastDiagnosticsMirrorAt < DIAGNOSTICS_MIRROR_MIN_INTERVAL_MS) {
+      LogCollector.log(TAG, "diagnostics mirror throttled (" + reason + ")")
+      return
+    }
+    EngineManager.lastDiagnosticsMirrorAt = now
     try {
       val ts = java.text.SimpleDateFormat("yyyyMMdd-HHmmss", java.util.Locale.US).format(java.util.Date())
       val dir = File(File(dshDataDir, "diagnostics"), ts + "-" + reason)
@@ -1232,10 +1255,25 @@ exec "${'$'}PROOT_BIN" --link2symlink --kill-on-exit -0 -r "${'$'}ROOTFS_DIR" -b
       engineProcess = null
     }
     // 兜底：命中快照 node 的残留进程（`bin.js web` 是该引擎的唯一形态；pnpm/脚本子进程
-    // 不含 bin.js web 特征，不会被误杀）。pkill 不可用时静默跳过。
+    // 不含 bin.js 特征，不会被误杀）。pkill 不可用时静默跳过。
     // 注：与 UpdateManager 的既有清理（pkill -f bin.js）口径一致。
     try {
       Runtime.getRuntime().exec(arrayOf("/system/bin/pkill", "-f", "bin.js")).waitFor()
+    } catch (_: Throwable) {
+    }
+    // 兜底 2（坑 28/31，2026-10）：pkill -f 在 vivo 等机型对 linker64 包装进程实测不生效，
+    // 孤儿 node 继续占端口 → 新引擎 bind 失败循环。直接扫 /proc/<pid>/cmdline 匹配 bin.js
+    // 特征后 kill -9（linker64 包装进程的 cmdline 同样含完整参数，可命中；排除自身 pid）。
+    try {
+      val myPid = android.os.Process.myPid()
+      File("/proc").listFiles()?.forEach { p ->
+        val pid = p.name.toIntOrNull() ?: return@forEach
+        if (pid == myPid) return@forEach
+        val cmd = try { File(p, "cmdline").readBytes().toString(Charsets.UTF_8) } catch (_: Throwable) { "" }
+        if (cmd.contains("bin.js")) {
+          try { Runtime.getRuntime().exec(arrayOf("/system/bin/kill", "-9", pid.toString())).waitFor() } catch (_: Throwable) {}
+        }
+      }
     } catch (_: Throwable) {
     }
   }
@@ -1390,6 +1428,18 @@ exec "${'$'}PROOT_BIN" --link2symlink --kill-on-exit -0 -r "${'$'}ROOTFS_DIR" -b
      *  double-start the engine (device-observed EADDRINUSE). 90s covers the
      *  slowest observed boot with margin. */
     const val START_COOLDOWN_MS = 90_000L
+
+    /** 崩溃重启限速（2026-10 循环重启修复）：上次启动的进程已死（启动即崩）时，
+     *  距上次启动不足该间隔不重复重启——避免「spawn→秒崩→5s 后再 spawn」风暴。 */
+    const val CRASH_RETRY_MIN_MS = 20_000L
+
+    /** 诊断镜像最小间隔（2026-10）：spawn 失败路径每 tick 触发时限制落盘频率，
+     *  防止 diagnostics 目录每 5s 膨胀一个包（logcat 400 行/次）。 */
+    const val DIAGNOSTICS_MIRROR_MIN_INTERVAL_MS = 60_000L
+
+    /** 上次诊断镜像时间（节流基线）。 */
+    @Volatile
+    var lastDiagnosticsMirrorAt: Long = 0
 
     /** Process-level start CAS: visible across EngineManager instances (double-start race guard). */
     val STARTING = java.util.concurrent.atomic.AtomicBoolean(false)

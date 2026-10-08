@@ -34,7 +34,10 @@ object UndoGate {
   /** 崩溃纪元间隔：距上次自动 undo 完成 < 该间隔时不再自动执行（防循环）。 */
   const val RETRY_WINDOW_MS = 30 * 60 * 1000L
 
-  /** 记录一次探测失败（带时间戳）；返回是否应该触发自动 undo。 */
+  /** 记录一次探测失败（带时间戳）；返回是否应该触发自动 undo。
+   *  2026-10 修复：首次到达阈值时写入 armedAt 开始 WATCH_MS 静默观察——旧实现 armed
+   *  文件只被读取从未写入，静默期形同虚设，看门狗每 tick（5s）都并发触发 execute
+   *  （每次起 node CLI 子进程、阻塞可达 60s+）→ 线程与子进程无限堆积（卡死根因之三）。 */
   fun onProbeFailure(context: Context, consecutiveFailures: Int): Boolean {
     if (consecutiveFailures < TRIGGER_CONSEC_FAILURES) return false
     val last = lastUndoAt(context)
@@ -42,13 +45,22 @@ object UndoGate {
       Log.i(TAG, "auto-undo suppressed: last undo at $last (within retry window)")
       return false
     }
+    val now = System.currentTimeMillis()
     val armedAt = armFile(context).takeIf { it.exists() }?.readText()?.trim()?.toLongOrNull()
-    if (armedAt != null && System.currentTimeMillis() - armedAt < WATCH_MS) {
+    if (armedAt != null && now - armedAt < WATCH_MS) {
       Log.i(TAG, "auto-undo delay: armed at $armedAt, waiting watch window")
+      return false
+    }
+    if (armedAt == null) {
+      try { armFile(context).writeText(now.toString()) } catch (_: Throwable) {}
+      Log.i(TAG, "auto-undo armed at $now (watch window ${WATCH_MS}ms)")
       return false
     }
     return true
   }
+
+  /** 执行互斥（2026-10）：防止看门狗/启动流程多线程并发 execute（多份 node CLI 子进程）。 */
+  private val EXECUTING = java.util.concurrent.atomic.AtomicBoolean(false)
 
   /**
    * 执行自动 undo（必须后台线程调用）：
@@ -57,6 +69,17 @@ object UndoGate {
    * 3. 返回是否执行了回滚（+ 摘要）
    */
   fun execute(context: Context, engine: EngineManager): UndoResult {
+    if (!EXECUTING.compareAndSet(false, true)) {
+      return UndoResult(false, "auto-undo already running", null)
+    }
+    try {
+      return executeLocked(context, engine)
+    } finally {
+      EXECUTING.set(false)
+    }
+  }
+
+  private fun executeLocked(context: Context, engine: EngineManager): UndoResult {
     val dsh = File(engine.homeDir, ".dsh")
     val cli = File(context.filesDir, "undo-emergency.mjs")
     if (!cli.exists()) {
@@ -67,17 +90,21 @@ object UndoGate {
     val list = runCli(context, engine, cli, dsh, listOf("list"))
     if (!list.any { it.startsWith("2026") || it.startsWith("20") } && !list.any { it.contains("[auto]") }) {
       Log.i(TAG, "auto-undo skipped: no snapshots found")
+      // 失败也写 marker（2026-10）：RETRY_WINDOW_MS 30min 是自动 undo 的唯一冷却——
+      // 不写 marker 会让看门狗每 tick 重试 execute（反复起 CLI 子进程）。
+      try { markerFile(context).writeText(System.currentTimeMillis().toString()) } catch (_: Throwable) {}
       return UndoResult(false, "无快照可回滚", null)
     }
     val out = runCli(context, engine, cli, dsh, listOf("restore-last-good"))
     val ok = out.any { it.contains("完成：还原") }
     val summary = out.joinToString("\n")
     if (ok) {
-      markerFile(context).writeText(System.currentTimeMillis().toString())
       LogCollector.log(TAG, "auto-undo executed: restore-last-good ok")
     } else {
       Log.e(TAG, "auto-undo failed: " + summary)
     }
+    // 成功与失败统一写 marker（2026-10）：本崩溃纪元的自动 undo 已处理，30min 内不重试。
+    try { markerFile(context).writeText(System.currentTimeMillis().toString()) } catch (_: Throwable) {}
     // 0.13.1 W3：急救触发即镜像现场到共享目录（引擎循环崩溃导致用户完全无法取日志的场景）。
     engine.mirrorDiagnosticsToShared("undo-gate")
     return UndoResult(ok, summary, if (ok) restoreTarget(out) else null)
@@ -128,11 +155,20 @@ object UndoGate {
           redirectErrorStream(true)
         }.start()
       }
-      val text = proc.inputStream.bufferedReader().use { it.readText() }
+      // 读线程 + 有界等待（2026-10 修复）：旧实现先 readText 全量读再 waitFor(60s)——
+      // 子进程不退出且不关 stdout 时 readText 永久阻塞，超时保护永不生效，调用线程
+      // 与 node 子进程随之堆积。现在由读线程消费输出，主路径 waitFor 超时后强杀。
+      var text = ""
+      val reader = Thread {
+        try { text = proc.inputStream.bufferedReader().use { it.readText() } } catch (_: Throwable) {}
+      }
+      reader.start()
       if (!proc.waitFor(60, java.util.concurrent.TimeUnit.SECONDS)) {
-        proc.destroy()
+        proc.destroyForcibly()
+        reader.join(3_000)
         return listOf("emergency CLI timeout")
       }
+      reader.join(5_000)
       text.lines()
     } catch (t: Throwable) {
       Log.e(TAG, "emergency CLI run failed", t)

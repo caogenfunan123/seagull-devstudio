@@ -25,9 +25,20 @@ object WatchdogV2 {
   private const val TAG = "dsh-watchdog"
   const val MAX_CONSEC_FAILURES = 12
 
+  /** half-open 恢复窗（2026-10 修复）：熔断持续该时长后自动降级重试一次。 */
+  private const val HALF_OPEN_MS = 5 * 60_000L
+
   @Volatile
   var consecutiveFailures = 0
     private set
+
+  /** 熔断进入时间（half-open 恢复基线）。 */
+  @Volatile
+  private var trippedAt = 0L
+
+  /** 引擎日志增量扫描游标（上次已读到的文件长度；rotate/截断时自动重置）。 */
+  @Volatile
+  private var lastLogOffset = 0L
 
   /** 指数退避：5s * 2^n，封顶 80s。返回下次探测延迟（ms）。 */
   fun nextDelayMs(): Long {
@@ -37,12 +48,29 @@ object WatchdogV2 {
 
   fun recordProbe(healthy: Boolean) {
     consecutiveFailures = if (healthy) 0 else consecutiveFailures + 1
+    if (consecutiveFailures >= MAX_CONSEC_FAILURES) trippedAt = System.currentTimeMillis()
   }
 
-  fun tripped(): Boolean = consecutiveFailures >= MAX_CONSEC_FAILURES
+  /**
+   * 熔断判定。half-open（2026-10 修复）：熔断 5 分钟后自动降级放行一轮探活——
+   * 熔断期间 recordProbe 停摆，旧实现 consecutiveFailures 永远 >= 阈值且无人复位，
+   * 看门狗永久瘫痪（只能等 MainActivity 用户交互路径 reset）。降级后探活失败会
+   * 在 recordProbe 里重新进入熔断（重开 5 分钟窗口），成功则归零恢复正常。
+   */
+  fun tripped(): Boolean {
+    if (consecutiveFailures < MAX_CONSEC_FAILURES) return false
+    if (System.currentTimeMillis() - trippedAt > HALF_OPEN_MS) {
+      consecutiveFailures = MAX_CONSEC_FAILURES - 6
+      trippedAt = System.currentTimeMillis()
+      LogCollector.log(TAG, "watchdog half-open: retry after circuit-break window")
+      return false
+    }
+    return true
+  }
 
   fun reset() {
     consecutiveFailures = 0
+    trippedAt = 0L
   }
 
   /** 深度探活：EngineProbe + 插件/权限端点 + 引擎日志尾部异常扫描。 */
@@ -96,20 +124,34 @@ object WatchdogV2 {
     }
   }
 
-  /** 引擎日志尾部异常扫描（最近 4KB 内 fatal/Error 关键字；命中率控制：只取尾部）。 */
+  /**
+   * 引擎日志异常扫描——增量式（2026-10 修复）：只检查上次读取之后**新写入**的内容
+   * （上限尾部 64KB），文件变短（rotate/截断）时重置游标。旧实现固定扫尾部 4KB，
+   * 历史错误行（UncaughtException / plugin tree failed to load）在日志安静期恒驻
+   * 尾部 → 引擎明明健康也恒判失败 → 看门狗循环重启（「用久了老是重启」根因之二）。
+   */
   private fun engineLogShowsFailure(context: Context): Boolean {
     return try {
       val f = java.io.File(context.filesDir, "engine.log")
-      if (!f.exists()) return false
-      java.io.RandomAccessFile(f, "r").use { raf ->
-        val len = raf.length()
-        val off = (len - 4096).coerceAtLeast(0)
-        raf.seek(off)
-        val buf = ByteArray((len - off).toInt().coerceAtMost(4096))
-        val n = raf.read(buf)
-        val tail = String(buf, 0, n.coerceAtLeast(0), Charsets.UTF_8)
-        tail.contains("UncaughtException") || tail.contains("plugin tree failed to load")
+      if (!f.exists()) {
+        lastLogOffset = 0L
+        return false
       }
+      val len = f.length()
+      if (len < lastLogOffset) lastLogOffset = 0L // rotate/截断：内容已换代
+      val start = maxOf(lastLogOffset, len - 65_536)
+      var found = false
+      if (len > start) {
+        java.io.RandomAccessFile(f, "r").use { raf ->
+          raf.seek(start)
+          val buf = ByteArray((len - start).toInt().coerceAtMost(65_536))
+          val n = raf.read(buf)
+          val tail = String(buf, 0, n.coerceAtLeast(0), Charsets.UTF_8)
+          found = tail.contains("UncaughtException") || tail.contains("plugin tree failed to load")
+        }
+      }
+      lastLogOffset = len
+      found
     } catch (_: Exception) {
       false
     }

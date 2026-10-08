@@ -94,6 +94,12 @@ class EngineService : Service() {
           // 唤醒锁续期：engine 常驻超过 30min 后半段无锁（acquire 定时释放）
           WatchdogV2.refreshWakeLock(this)
           if (!healthy && engineManager.engineReady) {
+            // 抖动保护（2026-10）：单次探活失败（HTTP 瞬时超时/日志增量误命中）不杀引擎；
+            // 连续 >=2 次失败（10s）才触发壳侧重启。startEngine 内部另有冷启动保护与崩溃限速。
+            if (WatchdogV2.consecutiveFailures < 2) {
+              LogCollector.log("dsh-watchdog", "probe failed once (#" + WatchdogV2.consecutiveFailures + "); waiting before restart")
+              return@scheduleWithFixedDelay
+            }
             engineManager.startEngine()
             // F3 自动回撤（D6 方案 a）：看门狗连续失败达到阈值（熔断前）时，
             // 触发急救 CLI 恢复最后良好快照；UndoGate 幂等 + 防循环。

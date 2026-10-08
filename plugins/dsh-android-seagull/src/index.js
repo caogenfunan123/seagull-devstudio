@@ -37,11 +37,10 @@ export function apply(ctx) {
         console.error('[dsh-android-seagull] persona.md missing; skipping persona section');
         return next();
       }
-      assembly.sections.push({
-        name: 'seagull',
-        text: personaText +
-          '\n\n本 fork（Seagull DevStudio）额外提供 root_ops / ubuntu_exec / apk_* / tool_install 等专用工具，用于 Android root、Ubuntu PRoot 开发容器与 APK 逆向构建。',
-      });
+      // 只注入 persona 本体（2026-10 额度优化）：persona 每轮请求都随 system prompt
+      // 发送，此处不再拼接工具说明——root/ubuntu/apk 工具的感知提示由 dsh-android-root-ops
+      // 等插件按档位条件注入（danger-full-access 才出现），避免固定重复消费 token。
+      assembly.sections.push({ name: 'seagull', text: personaText });
     } catch (_e) { console.error('[dsh-android-seagull] assemble error:', _e); }
     return next();
   });
