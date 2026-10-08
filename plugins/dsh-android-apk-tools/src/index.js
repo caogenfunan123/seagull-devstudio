@@ -405,12 +405,18 @@ function tools() {
         const { stdout } = await execFileAsync('grep', ['-rEn', '--include=*.smali', '--', pattern, dir], {
           timeout: 120000, maxBuffer: 16 * 1024 * 1024,
         });
+        // 冒号解析防 NaN（2026-10 第三轮复盘）：.smali 含 NUL/非 UTF-8 字节时 grep 输出
+        // "Binary file ... matches"（无冒号）→ Number('')=NaN 成员被 lossless 序列化整值拒收。
+        // 无冒号行/非有限行号跳过或降级 0。
         const matches = (stdout || '').split('\n').filter(Boolean).slice(0, n).map((line) => {
           const i = line.indexOf(':');
+          if (i <= 0) return null;
           const rest = line.slice(i + 1);
           const j = rest.indexOf(':');
-          return { file: line.slice(0, i), lineNumber: Number(rest.slice(0, j)), text: rest.slice(j + 1) };
-        });
+          if (j <= 0) return null;
+          const lineNumber = Number(rest.slice(0, j));
+          return { file: line.slice(0, i), lineNumber: Number.isFinite(lineNumber) ? lineNumber : 0, text: rest.slice(j + 1) };
+        }).filter(Boolean);
         return { ok: true, count: matches.length, matches };
       } catch (err) {
         if (err.code === 1) return { ok: true, count: 0, matches: [] };

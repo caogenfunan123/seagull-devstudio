@@ -136,7 +136,7 @@ object LogCollector {
       RandomAccessFile(f, "r").use { raf ->
         if (engineLogOffset > raf.length()) engineLogOffset = 0 // file was rotated/truncated
         raf.seek(engineLogOffset)
-        val size = (raf.length() - engineLogOffset).toInt().coerceAtMost(MAX_ENGINE_CHUNK)
+        val size = (raf.length() - engineLogOffset).coerceAtMost(MAX_ENGINE_CHUNK.toLong()).toInt()
         val buf = ByteArray(size)
         val n = raf.read(buf)
         engineLogOffset = raf.filePointer

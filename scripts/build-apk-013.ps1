@@ -8,8 +8,13 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 $Root = Split-Path -Parent $PSScriptRoot
-$Out = Join-Path $Root "out\v0.13.2-seagull"
 $apkDir = Join-Path $Root "dsh-mobile-apk"
+# 版本号单一来源（2026-10 第三轮复盘 P1）：ps1 曾硬编码 0.13.2-seagull，落后三个版本——
+# 产物落 out\v0.13.2-seagull\ 与 CI 分家、APK 文件名与包内 versionName 不一致。
+# 从 app/build.gradle.kts 读 versionName 字面量（gradle 亦以此为源），消除手写漂移。
+$VerBase = [regex]::Match((Get-Content (Join-Path $apkDir "app\build.gradle.kts") -Raw), 'versionName\s*=\s*"([^"]+)"').Groups[1].Value
+if (-not $VerBase) { Write-Host "无法从 build.gradle.kts 读取 versionName，拒绝打包"; exit 1 }
+$Out = Join-Path $Root "out\v$VerBase"
 New-Item -ItemType Directory -Force -Path $Out | Out-Null
 
 $pluginDirs = @(
@@ -34,7 +39,10 @@ $pluginDirs = @(
     (Join-Path $Root "plugins\dsh-android-backup")
 )
 
-foreach ($abi in @('arm64', 'x86_64')) {
+# arm64-only（2026-10 第三轮复盘 P2）：本 fork abiFilters 单保留 arm64-v8a——双 ABI 循环
+# 结束时 assets 停留 x86_64 快照（坑 30 现代版），此后任何人裸跑 gradlew assembleDebug
+# 即得错 ABI 快照包装 arm64 真机。默认循环收敛为 arm64，x86_64 仅为历史路径保留参数。
+foreach ($abi in @('arm64')) {
     if ($OnlyAbi -and $OnlyAbi -ne $abi) { continue }
     $snap = Join-Path $Root ".deploy-tmp\snapshot-013\$abi\snapshot.tar.xz"
     if (-not (Test-Path $snap)) { Write-Host "缺快照 $snap（先跑 build-snapshot-013.mjs）"; continue }
@@ -48,8 +56,19 @@ foreach ($abi in @('arm64', 'x86_64')) {
         foreach ($p in $pluginDirs) {
             if (-not (Test-Path (Join-Path $p "package.json"))) { Write-Host "缺插件源 $p"; continue }
             $lib = Join-Path $p "lib\index.js"
-            if (-not (Test-Path $lib)) {
-                Write-Host "== 构建插件（缺 lib/index.js）: $p =="
+            # mtime 陈旧检测（2026-10 第三轮复盘 P2）：原实现仅 lib 缺失才构建——改源码忘
+            # build 时本地注入陈旧 lib/ 且无任何提示（CI 路径总是全量重建，两侧不对称）。
+            # src/ 任一文件新于 lib/index.js 即重建。
+            $stale = $false
+            if (-not (Test-Path $lib)) { $stale = $true }
+            else {
+                $libT = (Get-Item $lib).LastWriteTime
+                $srcs = Get-ChildItem -Path (Join-Path $p "src") -Recurse -File -ErrorAction SilentlyContinue
+                if (-not $srcs) { $stale = $true }
+                elseif (@($srcs | Where-Object { $_.LastWriteTime -gt $libT }).Count -gt 0) { $stale = $true }
+            }
+            if ($stale) {
+                Write-Host "== 构建插件: $p =="
                 Push-Location $p
                 npm run build 2>&1 | Select-Object -Last 2
                 Pop-Location
@@ -128,11 +147,16 @@ foreach ($abi in @('arm64', 'x86_64')) {
     Copy-Item $snapIn (Join-Path $apkDir "app\src\main\assets\snapshot.tar.xz") -Force
     $sha = (Get-FileHash $snapIn -Algorithm SHA256).Hash.ToLower()
     Set-Content -Path (Join-Path $apkDir "app\src\main\assets\snapshot.sha256") -Value $sha -NoNewline -Encoding ascii
+    # 资产清单（2026-10 第三轮复盘 P1）：ps1 此前缺 gen-asset-manifest 步骤——本地/裸 gradle
+    # 产物无 asset-manifest.json，EngineManager.extractToolAssetsLocked 静默回退 legacy exists
+    # 路径，坑 44「半份永久定格」防护在本地构建整体失效，与 CI 保护级别不对称。
+    node (Join-Path $Root "scripts\gen-asset-manifest.mjs") (Join-Path $apkDir "app\src\main\assets") 2>&1 | Select-Object -Last 3
+    if ($LASTEXITCODE -ne 0) { Write-Host "资产清单生成失败，拒绝打包（$abi）"; continue }
     Push-Location $apkDir
     try {
         & .\gradlew :app:assembleDebug --no-daemon -PversionNameSuffix="$Suffix" 2>&1 | Select-Object -Last 4
         if ($LASTEXITCODE -ne 0) { throw "gradle 构建失败（$abi）" }
-        $ver = "0.13.2-seagull$Suffix"
+        $ver = "$VerBase$Suffix"
         Copy-Item "app\build\outputs\apk\debug\app-debug.apk" (Join-Path $Out "dsh-mobile-apk-v$ver-$abi.apk") -Force
         Write-Host "产物: $Out\dsh-mobile-apk-v$ver-$abi.apk"
     } finally {

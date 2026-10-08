@@ -153,7 +153,7 @@ object WatchdogV2 {
       if (len > start) {
         java.io.RandomAccessFile(f, "r").use { raf ->
           raf.seek(start)
-          val buf = ByteArray((len - start).toInt().coerceAtMost(65_536))
+          val buf = ByteArray((len - start).coerceAtMost(65_536L).toInt())
           val n = raf.read(buf)
           val tail = String(buf, 0, n.coerceAtLeast(0), Charsets.UTF_8)
           found = tail.contains("UncaughtException") || tail.contains("plugin tree failed to load")

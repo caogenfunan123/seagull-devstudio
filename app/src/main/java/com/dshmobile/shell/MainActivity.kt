@@ -219,6 +219,9 @@ class MainActivity : ComponentActivity() {
 
     /** 会话日志导出端点路径（WebView 内双拦截识别用）。 */
     const val SESSION_EXPORT_PATH = "/api/session.export"
+
+    /** 图片桥降采样峰值边长上限（相机原图 10-30MB，全量读入叠加 Base64 峰值 2.7 倍体积 OOM）。 */
+    const val MAX_IMAGE_DIM = 1568
   }
 
   // 文件上传（<input type=file> → WebView onShowFileChooser → 系统文件选择器）。
@@ -265,7 +268,14 @@ class MainActivity : ComponentActivity() {
       }
       try {
         val mediaType = contentResolver.getType(uri) ?: "image/jpeg"
-        val bytes = contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: byteArrayOf()
+        val bytes = readImageBytesScaled(uri, mediaType)
+        if (bytes == null) {
+          Log.w("dsh-image", "scaled read failed (too large or undecodable), size query skipped")
+          webView.evaluateJavascript(
+            "window.__dshBridge?.onImagePicked?.(" + jsString(callbackId) + ", null)", null,
+          )
+          return@registerForActivityResult
+        }
         Log.i("dsh-image", "read bytes=" + bytes.size + " type=" + mediaType)
         val b64 = android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)
         val dataUrl = "data:$mediaType;base64,$b64"
@@ -295,6 +305,45 @@ class MainActivity : ComponentActivity() {
     }
     pendingImagePickCallback = callbackId
     imagePickerBridge.launch(Unit)
+  }
+
+  /**
+   * 图片降采样读取（2026-10 第三轮复盘 P1）：旧实现 openInputStream.readBytes() 全量读入，
+   * 叠加 Base64(NO_WRAP) + data URL + jsString JSON 后峰值约 2.7 倍文件体积驻留堆——
+   * 现代相机单张 10-30MB 即 OOM kill。修法：SIZE 硬上限（60MB）快速拒绝 +
+   * 两趟 decode（bounds 探测算 inSampleSize，2 的幂递降）+ JPEG/PNG 重编码回传，
+   * data URL 体积随峰值边长封顶（1568px）。EXIF 旋转不正转（与原行为一致，
+   * 视觉模型可容忍——后续如需可在 decode 后按 orientation 矩阵旋转）。
+   */
+  private fun readImageBytesScaled(uri: android.net.Uri, mediaType: String): ByteArray? {
+    fun open() = contentResolver.openInputStream(uri)
+    var size = -1L
+    try {
+      contentResolver.query(uri, arrayOf(android.provider.OpenableColumns.SIZE), null, null, null)
+        ?.use { c -> if (c.moveToFirst()) size = c.getLong(0) }
+    } catch (_: Exception) {
+    }
+    if (size > 60L * 1024 * 1024) return null
+    val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+    open()?.use { android.graphics.BitmapFactory.decodeStream(it, null, bounds) }
+    if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
+    val opts = android.graphics.BitmapFactory.Options().apply {
+      var s = 1
+      while (minOf(bounds.outWidth, bounds.outHeight) / (s * 2) >= MAX_IMAGE_DIM) s *= 2
+      inSampleSize = s
+    }
+    val bmp = open()?.use { android.graphics.BitmapFactory.decodeStream(it, null, opts) }
+      ?: return null
+    val bos = java.io.ByteArrayOutputStream()
+    val fmt = if (mediaType == "image/png") {
+      android.graphics.Bitmap.CompressFormat.PNG
+    } else {
+      android.graphics.Bitmap.CompressFormat.JPEG
+    }
+    bmp.compress(fmt, 85, bos)
+    bmp.recycle()
+    val out = bos.toByteArray()
+    return if (out.isEmpty()) null else out
   }
 
   /** 字体大小持久化读取（设置 → 通用设置 滑块；默认 100）。 */
@@ -1831,12 +1880,24 @@ class MainActivity : ComponentActivity() {
     }
   }
 
-  /** engine.log 尾部摘要（测试界面诊断用；缺失/不可读返回空）。 */
+  /** engine.log 尾部摘要（测试界面诊断用；缺失/不可读返回空）。
+   *  有界尾部读（2026-10 第三轮复盘 P1）：旧实现 f.readLines() 把整个 engine.log
+   *  （3 代轮转 + 崩溃循环下可达数十 MB）一次性装入 List，且在 showGuide 的主线程
+   *  路径上调用 → 主线程卡死数秒 + 堆尖峰。改 RandomAccessFile 只读尾部 64KB
+   *  窗口再取末 N 行（与 WatchdogV2 增量扫描同范式）。 */
   private fun tailEngineLog(lines: Int): String {
     val f = File(filesDir, "engine.log")
     if (!f.exists()) return ""
     return try {
-      f.readLines().takeLast(lines).joinToString("\n")
+      java.io.RandomAccessFile(f, "r").use { raf ->
+        val len = raf.length()
+        if (len <= 0L) return ""
+        val window = minOf(len, 64L * 1024)
+        raf.seek(len - window)
+        val buf = ByteArray(window.toInt())
+        raf.readFully(buf)
+        String(buf, Charsets.UTF_8).lines().takeLast(lines).joinToString("\n")
+      }
     } catch (_: Exception) {
       ""
     }

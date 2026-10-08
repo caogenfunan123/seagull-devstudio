@@ -181,7 +181,7 @@ function currentStatus(env: NodeJS.ProcessEnv, defaultWriteMode?: string): AdbSt
         ? writeMode === 'danger-full-access'
           ? connected === false
             ? '已配对——连接待建立：执行时自动重连；仍失败请核对「无线调试」弹窗端口或重新配对'
-            : undefined
+            : ''
           : `已授权（引擎级）——当前部署档位 ${writeMode}，会话内档位实时判定（/permission danger-full-access 可即时开放）`
         : !fullAccess
           ? '未授权：需先授予系统「所有文件访问」（完全访问档位，授予后重启引擎生效）——自动审批模式不构成开放条件'

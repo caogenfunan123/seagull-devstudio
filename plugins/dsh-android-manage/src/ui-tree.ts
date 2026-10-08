@@ -79,9 +79,16 @@ export function parseUiTreeXml(xml: string): { raw: RawNode[]; rotation: number 
   // 栈帧：index = 本节点在同父下的序号；next = 下一个子节点槽位。
   // 虚拟根永远在栈底，其 index 不参与路径。
   const stack: Array<{ index: number; next: number }> = [{ index: -1, next: 0 }]
-  const re = /<node\s([^>]*?)(\/?)>/g
+  const re = /<node\s([^>]*?)(\/?)>|<\/(?:node|hierarchy)>/g
   let m: RegExpExecArray | null
   while ((m = re.exec(xml)) !== null) {
+    // 闭标签归位（2026-10 第三轮复盘修复）：旧正则只匹配开标签/自闭合，栈帧只压不弹，
+    // 「有子节点的节点 + 后续兄弟节点」的 hierarchy 中兄弟被错挂成前一兄弟的子节点
+    // （parentId/父链全错 → 祖先回退点错元素）。虚拟根（栈底）永不出栈。
+    if (m[0].startsWith('</')) {
+      if (stack.length > 1) stack.pop()
+      continue
+    }
     const attrsText = m[1]
     const selfClosing = m[2] === '/'
     const attrs: Record<string, string> = {}
@@ -191,6 +198,9 @@ export function resolveRef(
     }
   }
   if (kind === 'id') {
+    // 裸数字按 n 编号解析（工具描述承诺「裸数字按 id」，byId 键即 n0..nN；
+    // 旧实现裸 "2" 恒 miss）。"id:n3" 形式不受影响。
+    if (/^\d+$/.test(value)) value = 'n' + value
     const hit = byId.get(value)
     if (!hit) return { ok: false, error: `id "${value}" 不在最近一次 dump 中（页面可能已变化）——请重新 android_ui_dump` }
     return { ok: true, node: hit.n }

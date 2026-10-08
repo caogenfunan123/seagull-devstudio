@@ -139,8 +139,8 @@
 
 - root-ops 10 个工具无 `gateFor` 会话门控（仅 system-prompt 提示按档位条件注入；执行面任何档位可调 `su -c`）——涉及授权模型调整，需产品决策后与 AdbState 三道门统一。
 - UpdateManager 下载限流为事后校验、swap 前不杀引擎、pending 标记写入晚——0.13.1 既有行为，真机回归确认无实际事故后再说。
-- AdbState.ensureAdbServer 在 synchronized 内 `readText` 先于 `waitFor`（线程阻塞风险）——冷启动路径已在 F2 修复中缓解，改动需真机验证。
-- 插件层 P2 余项（uiCache 单槽跨会话、ui-tree 闭标签误判、tarRestore 成员类型不校验、gunzipSync 全内存、probeAllowlist denylist 语义、审计滚动非原子等）——均有明确修法，不影响主链路正确性。
+- AdbState.ensureAdbServer 在 synchronized 内 `readText` 先于 `waitFor`（线程阻塞风险）——冷启动路径已在 F2 修复中缓解，改动需真机验证。**（readText 部分已在第三轮随坑 64③ 修复为读线程 + 有界 waitFor；synchronized 锁粒度问题仍在结构性未修清单）**
+- 插件层 P2 余项（uiCache 单槽跨会话、ui-tree 闭标签误判、tarRestore 成员类型不校验、gunzipSync 全内存、probeAllowlist denylist 语义、审计滚动非原子等）——均有明确修法，不影响主链路正确性。**（ui-tree 闭标签误判已在第三轮修复，见坑 63；其余余项同第三轮结构性清单）**
 
 ## 六、真机测试结论（2026-10-08，v0.13.4-seagull apk-37714477450）
 
@@ -171,4 +171,21 @@
 | 7 | persona 模块自报 | PASS | 17 模块 = 5 基础 + 12 extended 全量；Protocol Reverse Routing 空标题段——**已修**（补内容） |
 | 8 | 工具面基线 | 测量完成 | 新会话 **89 个工具**（原预期 ~44 修正为 ~89），砍半空间约 45 个 |
 | 9 | 5 问额度观测 | 机械完成 | session d84e9bf8-…，10:43–10:45 窗口 5 笔，hit/miss 读数待 DeepSeek 后台查 |
+
+## 七、第三轮全量复盘与修复记录（2026-10-08）
+
+三路并行复审（Kotlin 壳层 23 文件 / 插件 11 包 / 构建链 + AGENTS.md 一致性），P0=0 / P1×10 / P2×29。已修 P1 与 P2 清单见 AGENTS.md 2026-10-08 第三轮更新记录行；坑 63（UI 树闭标签不弹栈）与坑 64（无界读 + 阻塞先于等待族）已登记。
+
+### 结构性 P2 未修清单（需设计决策或较大改动，按发布节奏处理）
+
+| # | 位置 | 问题 | 建议修法 |
+|---|---|---|---|
+| S1 | `AdbState.kt` | `adbPing` 在 `ensureAdbServer` 的 `synchronized` 块内调用——adbPing 本身已改为读线程 + 有界 waitFor（坑 64③），但锁粒度仍覆盖整个 ping 往返，配对页并发 getAdbState 会互相阻塞 | 收窄 synchronized 范围至 server 生命周期状态（spawn/复用判定），ping 移到锁外 |
+| S2 | `tool-installer/src/index.js` | `install()` 无进行中互斥（两次 tool_install 并发同工具会互相踩下载/解压目录）+ existsSync 幂等判定（半份静默复用，同坑 44 家族） | 进程内 Map 锁 + stamp/清单校验幂等 |
+| S3 | `backup/src/index.js` | `gunzipSync` 全内存解压——恶意/损坏 zip 炸弹可打爆堆 | 流式 gunzip（node:zlib createGunzip 管道）或解压前总量校验 |
+| S4 | `EngineProbe.kt` 等探针族 | `disconnect()` 不清 `prevErr`/`prevData`——下次连接旧错误数据被误当本次结果 | disconnect 时同步清零；或回调绑定单次连接 token |
+| S5 | `WatchdogV2.kt` | daemon 线程 run 体无 try/catch——未捕获异常静默杀死看门狗线程且无替代 | run 体顶层 try/catch 兜底 + 线程死亡计数报警 |
+| S6 | `MainActivity.kt` | `evaluateJavascript` 字符串拼 JS（callbackId 等）——回调 id 来自桥分配的白名单格式，注入面窄但存在 | 改 JSON 序列化传参（JSONObject.quote） |
+| S7 | `root-ops/src/index.ts` | 10 个 root 工具无 `gateFor` 会话门控——授权模型问题，需产品决策（第二轮遗留） | 与 AdbState 三道门统一为会话级 danger 门控 |
+| S8 | `UpdateManager.kt` | swap 前不杀引擎、pending 标记写入晚、下载限流为事后校验——0.13.1 既有行为 | 快照更新前 kill 引擎 + pending 标记前移 + 流式限长下载 |
 

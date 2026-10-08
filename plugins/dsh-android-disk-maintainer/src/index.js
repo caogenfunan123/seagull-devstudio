@@ -16,7 +16,7 @@
  * 触发：挂载后延迟 60s 跑一次（避开引擎启动高峰），此后每 6h 一次；
  * 定时器经 ctx.effect 持有，插件卸载即清理。维护日志写 .dsh/log/maintain.log。
  */
-import { readdirSync, lstatSync, existsSync, rmSync, mkdirSync, appendFileSync } from 'node:fs';
+import { readdirSync, lstatSync, existsSync, rmSync, mkdirSync, appendFileSync, statSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, basename } from 'node:path';
 import { defineTool } from '@deepseek-ai/dsh-tools';
 
@@ -87,7 +87,16 @@ function logDir() {
 
 function log(action) {
   try {
-    appendFileSync(join(logDir(), 'maintain.log'), JSON.stringify({ ts: new Date().toISOString(), ...action }) + '\n');
+    const f = join(logDir(), 'maintain.log');
+    appendFileSync(f, JSON.stringify({ ts: new Date().toISOString(), ...action }) + '\n');
+    // 滚动截断（2026-10 第三轮复盘 P3）：全仓最后一批无 cap 追加写（4 处审计点已在坑 62
+    // 统一 >2MB 保留尾 500 行）。量级极小但保持全仓一致。
+    try {
+      if (statSync(f).size > 2 * 1024 * 1024) {
+        const lines = readFileSync(f, 'utf8').split('\n').filter(Boolean);
+        writeFileSync(f, lines.slice(-500).join('\n') + '\n');
+      }
+    } catch { /* 截断失败不阻断维护 */ }
   } catch { /* 日志失败不阻断维护 */ }
 }
 

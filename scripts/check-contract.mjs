@@ -21,8 +21,12 @@ function dtsFiles(dir) {
 }
 
 console.log('== 1. bundle 行引用 ==')
+// 自包含 CI 无协调库（dsh/）在场：缺场 SKIP（warn），在场严格校验（2026-10 第三轮复盘
+// 接线 pr-gate 时发现——原实现在自包含仓库恒 FAIL 9 项，门禁要么恒红要么被绕过）。
+const upstreamInPlace = existsSync(join(root, contract.upstreamRepo))
 for (const row of contract.rows) {
   const patchFile = join(root, contract.upstreamRepo, 'packages/bundle', row.bundle, 'cordis.patch.yml')
+  if (!upstreamInPlace) { console.log('  SKIP 行 ' + row.id + '（协调库 ' + contract.upstreamRepo + ' 不在场）'); continue }
   if (!existsSync(patchFile)) { fail('bundle patch 缺失: ' + patchFile); continue }
   const text = readFileSync(patchFile, 'utf8')
   const hit = text.split('\n').find(l => l.trim() === '- id: ' + row.id)
@@ -36,18 +40,26 @@ for (const ins of contract.inserted) {
   if (!existsSync(join(repo, 'package.json'))) fail('仓库缺失: ' + ins.repo)
   else ok('仓库 ' + ins.repo + ' 存在')
   const built = existsSync(join(repo, 'lib/index.js')) || existsSync(join(repo, 'lib/client.js'))
-  if (!built) fail(ins.repo + ' 未构建（lib/ 缺失）')
+  // lib/ 未构建在 CI 静态门禁里仅 warn：构建产物由 build-apk 的 requires 段强制（缺即拒打包），
+  // 此处只守仓库存在性，避免 pr-gate 恒红（2026-10 第三轮复盘接线调整）。
+  if (!built) console.log('  WARN ' + ins.repo + ' lib/ 未构建（build-apk 门禁负责强制构建）')
   else ok(ins.repo + ' lib/ 已构建')
 }
 
 console.log('== 3. 继承符号（基线 node_modules 类型面） ==')
 const baseline = join(root, contract.symbols[0].repo, 'node_modules/@deepseek-ai')
-for (const sym of contract.symbols) {
-  const typesDir = join(baseline, sym.pkg, 'lib/types')
-  if (!existsSync(typesDir)) { fail('基线缺失 ' + sym.pkg + '/lib/types（先 npm install）'); continue }
-  const found = dtsFiles(typesDir).some(f => readFileSync(f, 'utf8').includes(sym.symbol))
-  if (found) ok(sym.pkg + ': ' + sym.symbol)
-  else fail(sym.pkg + ': 符号 ' + sym.symbol + ' 不在基线类型面（继承面断裂）')
+// 基线 node_modules 不在场（未 npm install / 自包含 CI 不装插件依赖）→ 整节 SKIP；
+// 在场则逐符号严格校验（2026-10 第三轮复盘接线调整）。
+if (!existsSync(baseline)) {
+  console.log('  SKIP 基线 node_modules 不在场（' + contract.symbols[0].repo + ' 未 npm install）')
+} else {
+  for (const sym of contract.symbols) {
+    const typesDir = join(baseline, sym.pkg, 'lib/types')
+    if (!existsSync(typesDir)) { fail('基线缺失 ' + sym.pkg + '/lib/types（先 npm install）'); continue }
+    const found = dtsFiles(typesDir).some(f => readFileSync(f, 'utf8').includes(sym.symbol))
+    if (found) ok(sym.pkg + ': ' + sym.symbol)
+    else fail(sym.pkg + ': 符号 ' + sym.symbol + ' 不在基线类型面（继承面断裂）')
+  }
 }
 
 console.log('== 4. 客户端槽位声明 ==')

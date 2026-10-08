@@ -34,6 +34,13 @@ jobs:
         run: |
           node scripts/check-boot-script.mjs
           node scripts/sim-boot-script.mjs
+      # 插件版本钉门禁（2026-10 第三轮复盘接线）：此前 check-contract.mjs 只存在于手动执行与
+      # 文档记载——某插件私自升降 dsh-tools/cordis/schemastery 版本 → 装配期 ERESOLVE/类型崩
+      # （坑 41/42 家族复发）且 CI 零拦截。注意其 inserted 仅覆盖 shell-termux/ui-responsive 两项，
+      # 11 个插件 package.json 的钉版漂移仍需扩展 inserted 后才有全覆盖（见 AGENTS.md §8）。
+      - name: 引擎版本钉一致性（坑 41/42/51 回归）
+        run: |
+          node scripts/check-contract.mjs
 
   compile:
     name: Kotlin 编译门禁

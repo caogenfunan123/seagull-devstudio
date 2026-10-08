@@ -485,9 +485,22 @@ object AdbState {
    */
   private fun adbPing(engine: EngineManager): Boolean = try {
     val proc = spawnAdb(engine, listOf("devices"))
-    val text = proc.inputStream.bufferedReader().use { it.readText() }
-    proc.waitFor(6, TimeUnit.SECONDS)
-    !text.contains("protocol fault") && text.contains("List of devices")
+    // 读线程 + 有界等待（2026-10 第三轮复盘 P1，同 UndoGate.runCli 范式）：旧实现
+    // readText 先于 waitFor——adb client 冷启动会 fork server，子孙进程继承 stdout
+    // fd 时 readText 永不返回，6s 超时分支形同虚设，配对页同步调用链永久挂起。
+    var text = ""
+    val reader = Thread {
+      try { text = proc.inputStream.bufferedReader().use { it.readText() } } catch (_: Throwable) {}
+    }
+    reader.start()
+    if (!proc.waitFor(6, TimeUnit.SECONDS)) {
+      proc.destroyForcibly()
+      reader.join(3_000)
+      false
+    } else {
+      reader.join(5_000)
+      !text.contains("protocol fault") && text.contains("List of devices")
+    }
   } catch (_: Throwable) {
     false
   }
@@ -535,11 +548,21 @@ object AdbState {
       val adb = File(engine.usrDir, "bin/adb")
       if (!adb.exists()) return listOf("adb not found in snapshot runtime")
       val proc = spawnAdb(engine, args)
-      val text = proc.inputStream.bufferedReader().use { it.readText() }
+      // 读线程 + 有界等待（2026-10 第三轮复盘 P1，同 UndoGate.runCli/adbPing 范式）：
+      // 旧实现 readText 先于 waitFor(timeoutS)——adb 的 fork server 或 shell 子孙
+      // 进程继承 stdout fd 时 readText 永不返回，timeout 分支不可达，WebView
+      // JavaBridge 线程永久阻塞，配对与 adbShell 双双无响应。
+      var text = ""
+      val reader = Thread {
+        try { text = proc.inputStream.bufferedReader().use { it.readText() } } catch (_: Throwable) {}
+      }
+      reader.start()
       if (!proc.waitFor(timeoutS, TimeUnit.SECONDS)) {
-        proc.destroy()
+        proc.destroyForcibly()
+        reader.join(3_000)
         return listOf("adb timeout")
       }
+      reader.join(5_000)
       text.lines()
     } catch (t: Throwable) {
       listOf("adb failed: " + (t.message ?: t.javaClass.simpleName))

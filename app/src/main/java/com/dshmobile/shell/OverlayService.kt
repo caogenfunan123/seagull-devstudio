@@ -354,7 +354,7 @@ class OverlayService : Service() {
         if (len < readOffset) readOffset = 0 // 文件被轮转重建
         if (len > readOffset) {
           raf.seek(readOffset)
-          val buf = ByteArray((len - readOffset).toInt().coerceAtMost(256 * 1024))
+          val buf = ByteArray((len - readOffset).coerceAtMost(256L * 1024).toInt())
           raf.readFully(buf)
           readOffset = len
           val tail = String(buf, Charsets.UTF_8)

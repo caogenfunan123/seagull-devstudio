@@ -108,7 +108,11 @@ jobs:
           if ! node scripts/build-snapshot-013.mjs "${{ matrix.abi }}"; then
             echo "::warning:: 从源重建快照失败，回退下载上游官方快照（仅当上游已发布）"
             mkdir -p ".deploy-tmp/snapshot-013/${{ matrix.abi }}"
-            VER="v0.13.1"
+            # 回退版本随当前版本变量（2026-10 第三轮复盘 P2）：原硬编码 v0.13.1，
+            # 0.13.4 时代会静默回退三个版本前的快照（引擎+插件全旧）装机。
+            # VER 从 app/build.gradle.kts 的 versionName 推导，与 gradle 单一来源一致。
+            VER="v$(grep -oP 'versionName\s*=\s*"\K[^"]+' app/build.gradle.kts | head -1)"
+            echo "::warning:: 回退下载上游快照版本 ${VER}"
             curl -sL -o ".deploy-tmp/snapshot-013/${{ matrix.abi }}/snapshot.tar.xz" \
               "https://github.com/kelai141/dsh-mobile-apk/releases/download/${VER}/snapshot-${{ matrix.abi }}.tar.xz"
             test -s ".deploy-tmp/snapshot-013/${{ matrix.abi }}/snapshot.tar.xz" || { echo "快照回退下载失败"; exit 1; }
