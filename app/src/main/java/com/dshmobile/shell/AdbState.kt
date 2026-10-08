@@ -572,6 +572,11 @@ object AdbAudit {
         .put("args", JSONObject(args as Map<*, *>))
         .put("result", "ok")
       f.appendText(entry.toString() + "\n")
+      // 滚动截断：>2MB 保留尾部 500 行（2026-10-08 真机报告 B5：无上限匀速增长）
+      if (f.length() > 2L * 1024 * 1024) {
+        val lines = f.readLines()
+        f.writeText(lines.takeLast(500).joinToString("\n") + "\n")
+      }
     } catch (_: Throwable) {
       /* 审计失败不阻断授权（隐私优先，静默放弃） */
     }

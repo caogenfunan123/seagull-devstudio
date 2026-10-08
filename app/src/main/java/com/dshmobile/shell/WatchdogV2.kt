@@ -95,7 +95,16 @@ object WatchdogV2 {
   /** 消费任务完成标记：逐行解析 → NotifyCenter 通知 → 清空标记（幂等；通知权限未授静默降级）。 */
   private fun consumeTaskDoneMarkers(context: Context) {
     val debugLog = java.io.File(context.filesDir, "notify-debug.log")
-    fun dbg(msg: String) { try { debugLog.appendText(System.currentTimeMillis().toString() + " " + msg + "\n") } catch (_: Exception) {} }
+    fun dbg(msg: String) {
+      try {
+        debugLog.appendText(System.currentTimeMillis().toString() + " " + msg + "\n")
+        // 滚动截断：>1MB 保留尾部 500 行（2026-10-08 真机报告 B5：诊断日志无上限匀速增长）
+        if (debugLog.length() > 1024L * 1024) {
+          val lines = debugLog.readLines()
+          debugLog.writeText(lines.takeLast(500).joinToString("\n") + "\n")
+        }
+      } catch (_: Exception) {}
+    }
     try {
       val f = taskMarkerFile(context)
       if (!f.exists() || f.length() == 0L) return

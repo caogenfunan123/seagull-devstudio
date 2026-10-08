@@ -14,7 +14,7 @@
  */
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { existsSync, appendFileSync, mkdirSync } from 'node:fs';
+import { existsSync, appendFileSync, mkdirSync, statSync, readFileSync, writeFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { defineTool } from '@deepseek-ai/dsh-tools';
@@ -63,6 +63,14 @@ function auditRoot(action, command, result) {
       cmdPreview: cmd.slice(0, 200),
     };
     appendFileSync(join(dir, 'audit.ndjson'), JSON.stringify(entry) + '\n');
+    // 滚动截断：>2MB 保留尾部 500 行（2026-10-08 真机报告 B5；对齐 bridge/root-ops）
+    try {
+      const file = join(dir, 'audit.ndjson');
+      if (statSync(file).size > 2 * 1024 * 1024) {
+        const lines = readFileSync(file, 'utf8').split('\n');
+        writeFileSync(file, lines.slice(-500).join('\n'));
+      }
+    } catch { /* 截断失败不阻断 */ }
   } catch { /* 审计失败不阻断 */ }
 }
 

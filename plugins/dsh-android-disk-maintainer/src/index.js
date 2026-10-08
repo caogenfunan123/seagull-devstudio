@@ -23,14 +23,27 @@ import { defineTool } from '@deepseek-ai/dsh-tools';
 export const name = 'dsh-android-disk-maintainer';
 export const inject = ['tools'];
 
-/** 单文件/目录递归字节数（lstat 语义：软链只算链接本身，防目录环重复计数） */
-function sizeOf(p) {
+/**
+ * 单文件/目录递归字节数（有界版，2026-10-08 真机虚报 322GB 实锤修复）：
+ * - lstat 语义：软链只算链接本身，防目录环重复计数；
+ * - **挂载边界**：记录递归根 st_dev，跨设备（proc/sys/dev 挂载、bind）不计入——
+ *   rootfs 运行时挂着真 proc，无边界递归会把 /proc/<pid>/fd 下指向同一批大文件的
+ *   幽灵条目累加成虚报体积（实测 322GB vs 实际 285M）；
+ * - **显式排除虚拟文件系统目录名**（proc/sys/dev）：容器未运行时空目录不计，
+ *   运行中挂载点由 st_dev 边界兜底，双保险。
+ */
+function sizeOf(p, rootDev) {
   let st;
   try { st = lstatSync(p); } catch { return 0; }
+  if (rootDev === undefined) rootDev = st.dev;
+  if (st.dev !== rootDev) return 0;
   if (!st.isDirectory()) return st.size;
   let total = 0;
   try {
-    for (const e of readdirSync(p)) total += sizeOf(join(p, e));
+    for (const e of readdirSync(p)) {
+      if (e === 'proc' || e === 'sys' || e === 'dev') continue;
+      total += sizeOf(join(p, e), rootDev);
+    }
   } catch { /* 不可读子树按 0 计 */ }
   return total;
 }
