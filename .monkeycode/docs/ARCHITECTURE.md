@@ -31,7 +31,7 @@ Seagull DevStudio（`com.dsharnessmobile.shell`，versionName 0.13.2-seagull，a
 - 授权状态：`dsh-adb` SharedPreferences（live prefs：fullAccess/allowSwitch/paired/port）
 
 **基础设施**
-- CI：GitHub Actions（.github/workflows/build-apk.yml 云端从源重建；build-snapshot.yml；pr-gate.yml）
+- CI：GitHub Actions（.github/workflows/build-apk.yml 云端从源重建；pr-gate.yml）
 - 发布/底座托管：GitHub Releases（上游 `kelai141/dsh-mobile-apk` 底座与官方快照，构建时 curl 直连下载）
 - 设备运行时：ADB（无线调试 SPAKE2 pair + NSD 端口发现 + 内置 adb server）与 KernelSU root
 

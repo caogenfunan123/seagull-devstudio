@@ -55,8 +55,7 @@
 
 ## CI（.github/workflows）
 
-- `build-apk.yml`：workflow_dispatch + push，arm64 从源重建（base/ LFS 底座、插件构建、工具与 rootfs 资产从官方 Release 下载、快照从源失败回退官方 v0.13.1 arm64 快照），仅 upload-artifact debug。
-- `build-snapshot.yml`：快照构建工作流。
+- `build-apk.yml`：workflow_dispatch + push，arm64 从源重建（base/ LFS 底座、插件构建、工具与 rootfs 资产从官方 Release 下载、快照从源失败回退官方版本快照），仅 upload-artifact debug。
 - `pr-gate.yml`：PR 门禁（语法/契约/合规点）。
 
 ## 输出约定

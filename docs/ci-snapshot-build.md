@@ -1,6 +1,12 @@
 # 快照构建 CI/CD 方案（草案 v0.1）
 
-> 状态：待确认。目标：把双 ABI APK 构建搬到 GitHub Actions，产物存 workflow artifact，测试闭环后手动发 release。
+> 状态：**已废止（2026-10-08）**。本文为 0.12.4 时代的协调仓库三插件 CI 方案；其 workflow
+> `build-snapshot.yml` 仅构建 dsh-shell-termux/dsh-client-ui-responsive/dsh-host-web-compat
+> 三个旧插件且依赖协调库兄弟目录，随自包含化（build-apk.yml 从源重建 + Seagull 7 插件）已失效，
+> 2026-10-08 删除。现行构建链见 AGENTS.md §2 与 `scripts/build-apk-013.ps1` / `build-apk.mjs`。
+> 以下内容仅作历史记录保留。
+>
+> 原状态：待确认。目标：把双 ABI APK 构建搬到 GitHub Actions，产物存 workflow artifact，测试闭环后手动发 release。
 
 ## 一、总体流程
 
