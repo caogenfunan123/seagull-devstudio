@@ -212,6 +212,7 @@ cd ..\plugins\dsh-android-<pkg> && npm run build
 - **~~扫描/图片版 PDF → 页图渲染受限~~（0.13.1 已修，0.13.0 记录作废）**：原记录「`@napi-rs/canvas` 仅 glibc 预编译装不上」系**误判**——npm 有 `@napi-rs/canvas-android-arm64`（N-API/Bionic 预编译，os=android cpu=arm64，真机 createCanvas 实测可用）。0.13.1 起随出厂快照装配（profiles/web package.json 登记 + tarball 解入，仅 arm64；npm 无 android-x86_64 triple，x86_64 模拟器维持守卫降级）。构建脚本 7c2 段。
 - **marketplace 惰性加载决策（0.13.0 D4）**：cordis 装配层无惰性概念；拆装配违反 F4「内置市场」。启动速度优化由 D2（快照瘦身）+ D3（NODE_COMPILE_CACHE）承担，marketplace 保持启动装配。
 - **provider 命名混淆（0.13.0 C3 实锤）**：默认 pin 曾为 `opencode-go`（OpenCode Zen Go 网关，`opencode.ai/zen/go/v1`，实测 404）——用户误以为配了 OpenRouter。0.13.0 默认 pin 改 `deepseek-official`（壳注 DEEPSEEK_API_KEY），opencode-go/OpenRouter 需在「添加自定义供应商」显式配置；设置页文案与文档需持续提醒区分。
+- **额度优化方向已实测定案（2026-10-08 真机全战役账本）**：缓存机制健康——全战役 358 次调用 / 缓存读取 30.5M / 命中率 97.5%，单次调用平均新增输入仅 2.2K token（前缀稳定，persona 分层 + 工具 schema 的每轮固定开销绝大部分由缓存服务，无需再修前缀抖动）。唯一剩余优化项 = **引擎侧按会话过滤工具 schema**：新会话工具面实测 89 个（~14K 字符/轮固定开销），砍半空间约 45 个——这是优化项不是修复项，改动面在引擎工具注册层（按会话档位/已装能力裁剪），需引擎侧支持，壳与插件层无法单独实现。
 
 ---
 
