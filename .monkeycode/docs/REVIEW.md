@@ -142,3 +142,19 @@
 - AdbState.ensureAdbServer 在 synchronized 内 `readText` 先于 `waitFor`（线程阻塞风险）——冷启动路径已在 F2 修复中缓解，改动需真机验证。
 - 插件层 P2 余项（uiCache 单槽跨会话、ui-tree 闭标签误判、tarRestore 成员类型不校验、gunzipSync 全内存、probeAllowlist denylist 语义、审计滚动非原子等）——均有明确修法，不影响主链路正确性。
 
+## 六、真机测试结论（2026-10-08，v0.13.4-seagull apk-37714477450）
+
+**六项验证全部通过，0 个 P0/P1 回归。** 设备：aarch64 真机 + KernelSU root 免弹窗；包体 sha256 与 release 完全一致（252,356,699B）；snapshot node ELF = EM_AARCH64；引擎探活 32080 HTTP 200/3ms；冷启 `am start` → 引擎就绪 3s，force-stop 后 EngineService ~39s 自愈。
+
+| 项 | 结论 | 证据 |
+|---|---|---|
+| 冷启动 ×3 不回滚（P0 坑 56 修复） | PASS | 三轮 settings.yaml sha256 均等于基线，engine.log 每轮干净，logcat 无 auto-undo |
+| radare2 在线安装（P1-3 坑 49 修复） | PASS | `tool_install --force` ok → radare2 5.9.8，bin 全家桶在位（开机 probe EACCES 系误报） |
+| 不可点节点祖先回退（P1-4 坑 57 修复） | PASS | root 通道点系统设置不可点摘要成功跳页 |
+| env_recipe 导出（P2-7） | PASS | 零序列化错误，profilePatch 数据源在场 |
+| backup 全流程（P2-2） | PASS | pre-restore 快照落盘、哈希一致、无 ENOENT |
+| 分享 + 清理（P2-1） | PASS | 文件入 incoming → 自动建 session-1 → clean removed:1 |
+| 10s probe 指纹（P2-10） | PASS（未执行停悬浮球动作，指纹级证据） | 60s logcat 324 次连接节律为 3s 轮询，9.5-10.5s 零命中 |
+
+报告另抓 1 个代码级待修项（safeResolveInside 路径形态敏感，壳侧 `/data/data` 形态 + ws `/data/user/0` 形态被早期字符串判定误拒 → 分享入队 100% 失败）——**已修**，见坑 59；另 1 条手册备注（设备端 `tar -xf` 踩 `xz: Cannot exec`，改 `xz -dc | tar -x`）已同步 §3.2 步 4 与坑 49。
+

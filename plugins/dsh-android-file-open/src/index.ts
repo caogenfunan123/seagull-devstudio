@@ -123,38 +123,47 @@ function ensureSessions(sessions: HostSessions | undefined): number {
 let ctxLogger: ((scope: string) => { warn?(msg: string): void; info?(msg: string): void }) | undefined
 
 /**
- * 解析到工作区内的规范化真实路径（H3 + 2026-08-23 前缀混用修复）：
+ * 解析到工作区内的规范化真实路径（H3 + 2026-08-23 前缀混用修复 + 0.13.4 形态敏感修复）：
  * - ws+sep 边界判定（同名前缀碰撞不通过；resolve 折叠 .. 后的落点为准）；
  * - **两侧都 realpath 后再比较**——Android 上 /data/user/0 可能是指向 /data/data 的
  *   软链（实测：仅 realpath 文件侧会把 rp 变成 /data/data 前缀，与未 realpath 的 ws
  *   比较必拒——正是"B7 前缀混用"的运行时表现）；ws 侧 realpath 失败按原样参与比较；
- * - 任一解析失败（不存在/越界/IO 错误）返回 null。
+ * - **路径形态不敏感**（2026-10-08 真机实测复现）：壳侧 POST /data/data 形态、ws 为
+ *   /data/user/0 形态（或反之）时，早期字符串边界判定会把两种等价形态误拒——两侧
+ *   realpath 规范化后形态天然一致，比较必然命中；早期判定只做快速拒绝；
+ * - 任一解析失败（不存在/越界/IO 错误）返回 null；
+ * - 安全语义不变：软链落点越界时只回传 ws 内原始形态（与原实现一致），
+ *   绝不把外部落点当结果返回。
  */
 function safeResolveInside(ws: string, path: string): string | null {
   let real: string
-  let wsReal: string
   try {
     real = resolve(path)
-    const inBound = real === ws || real.startsWith(ws + sep)
-    if (!inBound) return null
   } catch {
     return null
   }
+  const inside = (a: string, b: string) => a === b || a.startsWith(b + sep)
+  let wsReal: string
   try {
     wsReal = realpathSync(ws)
   } catch {
     wsReal = ws
   }
+  let realReal: string
   try {
-    // realpath 跟随符号链接：工作区内软链指向外部时，最终落点越界 → 拒绝
-    const rp = realpathSync(real)
-    if (rp === wsReal || rp.startsWith(wsReal + sep)) return rp
-    // 兼容：若文件确在 ws 内但文件名含坏字符被捕获等情形，走边界回退判定
-    return real.startsWith(wsReal + sep) ? real : null
+    // realpath 跟随符号链接：工作区内软链指向外部时，最终落点越界 → 主判定拒绝
+    realReal = realpathSync(real)
   } catch {
-    // 文件不存在（realpath ENOENT）：交由调用方 existsSync 判定
-    return real.startsWith(wsReal + sep) ? real : null
+    realReal = real
   }
+  // 主判定：两侧规范化后比较（/data/user/0 与 /data/data 软链形态天然兼容）
+  if (inside(realReal, wsReal)) return realReal
+  // 回退 1：ws 侧 realpath 失败时按 ws 原形比较
+  if (inside(realReal, ws)) return realReal
+  // 回退 2：path 侧 realpath 失败（ENOENT 等）——只回传 ws 内原始形态，
+  // 文件不存在交由调用方 existsSync 判定；软链外部落点在任何分支都不可返回
+  if (inside(real, wsReal) || inside(real, ws)) return real
+  return null
 }
 
 function tools() {
