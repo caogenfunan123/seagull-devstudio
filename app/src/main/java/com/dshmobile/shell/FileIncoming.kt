@@ -152,7 +152,7 @@ object FileIncoming {
    */
   private fun deleteRecursively(f: File): Boolean {
     return try {
-      if (Files.isSymbolicLink(f) || !f.isDirectory) {
+      if (Files.isSymbolicLink(f.toPath()) || !f.isDirectory) {
         Files.deleteIfExists(f.toPath())
       } else {
         // 与 SnapshotExtractor.deleteForOverwrite 同模式：逆序 + use 关流。
