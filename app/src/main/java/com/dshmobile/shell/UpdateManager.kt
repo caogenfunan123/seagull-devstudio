@@ -71,6 +71,12 @@ class UpdateManager(private val context: Context) {
           }
           throw IllegalStateException("切换失败（已回退旧代）")
         }
+        // P1-K3（2026-10 专家审查修复）：指纹写入前移至 swap 成功后立即执行——原顺序
+        // （先杀引擎再写指纹）若在窗口期中断，下次启动误判「快照过期」重解压 assets，
+        // 在线更新被静默回滚到出厂态。
+        if (expectedSha.isNotEmpty()) {
+          File(context.filesDir, ".snapshot-fingerprint").writeText(expectedSha)
+        }
         deleteRecursively(stage)
         // 更新管理器第二版（PRD F3.2/F1.10）：保留上一版运行时（usr-old），
         // 由 EngineManager 探活确认（连续 N 次健康）后清理；超窗未健康自动回退旧代。
@@ -80,16 +86,8 @@ class UpdateManager(private val context: Context) {
 
         // Kill the old engine process: the EngineService watchdog restarts
         // it from the NEW usr within seconds.
-        try {
-          Runtime.getRuntime().exec(arrayOf("/system/bin/pkill", "-f", "bin.js")).waitFor()
-        } catch (_: Throwable) {
-        }
-        // Record the snapshot fingerprint: distinguishes an online update from the embedded assets
-        // fingerprint (otherwise the next boot misjudges "snapshot stale" and re-extracts the assets
-        // snapshot, reverting the online update to factory state).
-        if (expectedSha.isNotEmpty()) {
-          File(context.filesDir, ".snapshot-fingerprint").writeText(expectedSha)
-        }
+        // P1-K2：裸 pkill 杀不死 linker64 包装进程（坑 31）——复用孤儿扫描 kill。
+        EngineManager.killOrphanEngineProcesses()
         onStatus("更新完成，引擎已自动重启")
       } catch (t: Throwable) {
         onStatus("更新失败：" + (t.message ?: t.javaClass.simpleName))

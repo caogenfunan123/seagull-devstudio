@@ -85,19 +85,29 @@ jobs:
           # fork 未上传 LFS 底座对象：base-usr-*.tar.xz 是 133B LFS 指针 → 从上游 media 直连下载真实归档
           if [ ! -s "base/base-usr-${abi}.tar.xz" ] || [ "$(wc -c < base/base-usr-${abi}.tar.xz)" -lt 1000 ]; then
             echo "::warning:: base-usr-${abi}.tar.xz 为 LFS 指针，从上游 kelai141/dsh-mobile-apk 直连下载"
-            curl -sL -o base/base-usr-${abi}.tar.xz \
+            curl -fsSL -o base/base-usr-${abi}.tar.xz \
               "https://media.githubusercontent.com/media/kelai141/dsh-mobile-apk/main/base/base-usr-${abi}.tar.xz"
           fi
           test -s "base/base-usr-${abi}.tar.xz" || { echo "缺 base/base-usr-${abi}.tar.xz"; exit 1; }
           cp "base/base-usr-${abi}.tar.xz" ".deploy-tmp/${bdir}/base-usr.tar.xz"
+          MAGIC=$(od -An -tx1 -N6 "base/base-usr-${abi}.tar.xz" | tr -d ' \n')
+          if [ "$MAGIC" != "fd377a585a00" ]; then
+            echo "::error:: base-usr-${abi}.tar.xz is not a valid xz (magic $MAGIC) - refuse corrupt base"
+            exit 1
+          fi
           # base-dsh 同样是 LFS 指针（133B）→ 直连上游下载真实归档（含 home/.dsh 配置层）
           if [ ! -s "base/base-dsh.tar.xz" ] || [ "$(wc -c < base/base-dsh.tar.xz)" -lt 1000 ]; then
             echo "::warning:: base-dsh.tar.xz 为 LFS 指针，从上游 kelai141/dsh-mobile-apk 直连下载"
-            curl -sL -o base/base-dsh.tar.xz \
+            curl -fsSL -o base/base-dsh.tar.xz \
               "https://media.githubusercontent.com/media/kelai141/dsh-mobile-apk/main/base/base-dsh.tar.xz"
           fi
           if [ -f "base/base-dsh.tar.xz" ] && [ "$(wc -c < base/base-dsh.tar.xz)" -ge 1000 ]; then
             cp "base/base-dsh.tar.xz" ".deploy-tmp/${bdir}/base-dsh.tar.xz"
+          MAGIC=$(od -An -tx1 -N6 "base/base-dsh.tar.xz" | tr -d ' \n')
+          if [ "$MAGIC" != "fd377a585a00" ]; then
+            echo "::error:: base-dsh.tar.xz is not a valid xz (magic $MAGIC) - refuse corrupt base"
+            exit 1
+          fi
           fi
           du -sh ".deploy-tmp/${bdir}"
 
@@ -113,7 +123,7 @@ jobs:
             # VER 从 app/build.gradle.kts 的 versionName 推导，与 gradle 单一来源一致。
             VER="v$(grep -oP 'versionName\s*=\s*"\K[^"]+' app/build.gradle.kts | head -1)"
             echo "::warning:: 回退下载上游快照版本 ${VER}"
-            curl -sL -o ".deploy-tmp/snapshot-013/${{ matrix.abi }}/snapshot.tar.xz" \
+            curl -fsSL -o ".deploy-tmp/snapshot-013/${{ matrix.abi }}/snapshot.tar.xz" \
               "https://github.com/kelai141/dsh-mobile-apk/releases/download/${VER}/snapshot-${{ matrix.abi }}.tar.xz"
             # xz 魔数校验（2026-10-08 实锤修复）：release 不存在时 curl 落盘的是 404 HTML 页，
             # test -s 非空即放行 → inject-snapshot.py 报 LZMAError 格式错误（根因远离现场）。
@@ -133,15 +143,19 @@ jobs:
             mkdir -p app/src/main/assets/tools
             # 轻资产化（2026-09-18 P2）：仅保留 apktool（22M，使用频度高）随包；
             # jadx/radare2/rizin（合计 ~152M）改 tool-installer 在线安装（在线为主，sha256 内置校验）。
-            curl -sL -o app/src/main/assets/tools/apktool.jar \
+            curl -fsSL -o app/src/main/assets/tools/apktool.jar \
               "https://bitbucket.org/iBotPeaches/apktool/downloads/apktool_2.9.3.jar"
             test -s app/src/main/assets/tools/apktool.jar || { echo "apktool 下载失败"; exit 1; }
+          JARH=$(od -An -tx1 -N4 app/src/main/assets/tools/apktool.jar | tr -d ' \n')
+          if [ "$JARH" != "504b0304" ]; then echo "apktool.jar is not a valid zip (magic $JARH)"; exit 1; fi
             # Ubuntu 24.04 rootfs：proot-distro 官方 minbase 原样入包（arm64 约 65M）。
             # 不再 CI qemu 注入编译工具链（省 ~234M）；工具链改设备端
             # dev-tools `ubuntu_toolchain_install`（root chroot 内 apt 真机实测全绿，坑 38）。
-            curl -sL -o app/src/main/assets/ubuntu-rootfs.tar.xz \
+            curl -fsSL -o app/src/main/assets/ubuntu-rootfs.tar.xz \
               "https://github.com/termux/proot-distro/releases/download/v4.18.0/ubuntu-noble-aarch64-pd-v4.18.0.tar.xz"
             test -s app/src/main/assets/ubuntu-rootfs.tar.xz || { echo "minbase rootfs 下载失败"; exit 1; }
+          MAGIC=$(od -An -tx1 -N6 app/src/main/assets/ubuntu-rootfs.tar.xz | tr -d ' \n')
+          if [ "$MAGIC" != "fd377a585a00" ]; then echo "ubuntu-rootfs.tar.xz is not a valid xz (magic $MAGIC)"; exit 1; fi
             du -sh app/src/main/assets/tools app/src/main/assets/ubuntu-rootfs.tar.xz
           fi
 

@@ -172,7 +172,48 @@
 | 8 | 工具面基线 | 测量完成 | 新会话 **89 个工具**（原预期 ~44 修正为 ~89），砍半空间约 45 个 |
 | 9 | 5 问额度观测 | 机械完成 | session d84e9bf8-…，10:43–10:45 窗口 5 笔，hit/miss 读数待 DeepSeek 后台查 |
 
-## 七、第三轮全量复盘与修复记录（2026-10-08）
+## 七、第四轮全量专家评审批修（2026-10-08，P0×4 + P1×11）
+
+### P0（必修，全部已修）
+
+| # | 位置 | 问题 | 修复 |
+|---|---|---|---|
+| P0-1 | `FileIncoming.kt:207` | `copyIn` 调用 `canonicalPath` 前未验证目标路径仍在 dir 内——符号链接逃逸可绕过边界检查 | 目标 canonicalPath 生成后再次 `startsWith(dir)` 防御（defense in depth） |
+| P0-2 | `FileIncoming.kt:123` | `sanitizeName` 只替换 `..`，未处理 `/`/`\` ——路径注入可逃逸到上级目录 | 替换 `/`/`\` 为 `_` + 压缩连续 `..` 为 `__` |
+| P0-3 | `scripts/build-apk-013.ps1` | 门禁失败只打印不计数，最终不 exit ——本地构建失败仍产坏包 | `$failed` 数组聚合所有失败 + `exit 1` 终止 |
+| P0-4 | `.github/workflows/build-apk.yml` | curl 无 `-f` 标志 + 回退下载只校验非空 ——404 HTML/损坏快照可冒充合法产物 | curl 统一 `-f` + xz/PK 魔数校验 |
+
+### P1（已修，11项）
+
+| # | 位置 | 问题 | 修复 |
+|---|---|---|---|
+| P1-K1 | `MainActivity.kt:630` | `onResume` 主线程同步 `EngineProbe.check()` ——耗时 ~800ms 可卡 UI | 改直接 `startEngineFlow()`（内部后台线程探活） |
+| P1-K2 | `MainActivity.kt:restartEngine` | 用裸 `pkill` ——对 vivo linker64 包装进程不生效（坑 31） | 调 `EngineManager.killOrphanEngineProcesses()`（companion 公开方法） |
+| P1-K3 | `UpdateManager.kt:127` | fingerprint 写在 swap 之后 ——中断回退到出厂态；swap 前未 kill 引擎 | fingerprint 移至 swap 成功后立即写 + 调 killOrphanEngineProcesses |
+| P1-K4 | `OverlayService.kt:147` | `removeCallbacksAndMessages(null)` 误判清空主 looper | 实为 Handler 实例隔离，仅清本 Handler 消息（Android API 语义） |
+| P1-A1 | `EngineManager.kt:937/943` | 正则 `[A-Za-z0-9]{8}` 不匹配含 `_`/`-` 的 vite hash（如 `vendor-D22_Mp1f.js`） | 改 `[A-Za-z0-9_-]{8}` |
+| P1-A2 | `undo-emergency.mjs:166` | 零还原仍打印成功并返回 true ——UndoGate 据此写幂等 marker，恢复未发生 | `restored===0` 打印失败并返回 false |
+| P1-A3 | `undo-emergency.mjs` | `lastGoodSnapshot` 未排除 pre-restore 快照 ——恢复链自环 | pre-restore 快照落 manual kind（自动被 auto 过滤）+ reason 前缀滤 belt |
+| P1-A4 | `undo-emergency.mjs` | `restore()` 无 pre-restore 快照 ——恢复动作本身不可逆 | `restore()` 前调用 `capturePreRestore()` 尽力捕获当前态 |
+| P1-P1 | `tool-installer/src/index.js:300` | `extractArchive` 失败后无清理 ——残留目录导致 existsSync 幂等误判已装 | 失败时 `rmSync(info.installPath, { recursive: true, force: true })` |
+| P1-B3 | `gen-asset-manifest.mjs:95` | `fileBytes` 用 `norm`（可能含重复路径）求和，与 `members` 用 `uniquePaths` 口径不一致 | 按 path 去重后再求和（先 uniquePaths 筛选 → Map 去重 → reduce） |
+
+### 未修（记录在案）
+
+- P1-P2 ubuntu_exec gating：容器 shell 隔离环境，非宿主 root 通道，过度加固
+- P1-P3 mount idempotence：BOOT_SCRIPT 已幂等（grep 检查后 mount）
+- P1-P4 ledger lazy parse：代码中无 "ledger" 概念，可能为审查报告笔误
+- P1-B1 python/python3：全仓统一 python3，无不一致
+- P1-B2 inject-snapshot：INJECT_FILES 显式白名单属设计行为
+- P1-B4 proot-entry bind：三处启动器 bind 逻辑已对齐（chroot/proot/fake-sysdata）
+
+### 验证
+
+- node --check 全部 JS 文件通过
+- Kotlin 改动待 CI PR Gate 验证（本地无 Android SDK）
+- 改动文件数：11（Kotlin 5 + JS 3 + PS1 1 + YAML 1 + MD 1）
+
+## 八、第三轮全量复盘与修复记录（2026-10-08）
 
 三路并行复审（Kotlin 壳层 23 文件 / 插件 11 包 / 构建链 + AGENTS.md 一致性），P0=0 / P1×10 / P2×29。已修 P1 与 P2 清单见 AGENTS.md 2026-10-08 第三轮更新记录行；坑 63（UI 树闭标签不弹栈）与坑 64（无界读 + 阻塞先于等待族）已登记。
 

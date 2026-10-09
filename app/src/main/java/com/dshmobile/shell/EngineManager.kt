@@ -934,13 +934,16 @@ exec "${'$'}PROOT_BIN" --link2symlink --kill-on-exit -0 -r "${'$'}ROOTFS_DIR" -b
       val current = engineIndex.readText()
       val p = patched.toString(Charsets.UTF_8)
       var out = p
-      val refRe = Regex("(?:/|\")assets/([A-Za-z0-9_.-]+)-([A-Za-z0-9]{8})\\.(js|css)(?:\"| )")
+      // P1-A1（2026-10 专家审查修复）：hash 字符类补 _-——vite 产物哈希含下划线/连字符
+      // （实机现值 vendor-D22_Mp1f.js / vendor-CjyC-hUb.css），旧字符类漏匹配 → 注入
+      // patched/index.html 引用悬空旧 hash → 引擎升级后白屏/丢 CSS（坑 16 家族）。
+      val refRe = Regex("(?:/|\")assets/([A-Za-z0-9_.-]+)-([A-Za-z0-9_-]{8})\\.(js|css)(?:\"| )")
       val curRefs = refRe.findAll(current)
       for (m in curRefs) {
         val stem = m.groupValues[1]
         val hash = m.groupValues[2]
         val ext = m.groupValues[3]
-        val old = Regex("assets/" + Regex.escape(stem) + "-[A-Za-z0-9]{8}\\." + ext)
+        val old = Regex("assets/" + Regex.escape(stem) + "-[A-Za-z0-9_-]{8}\\." + ext)
         out = out.replace(old, "assets/$stem-$hash.$ext")
       }
       out.toByteArray(Charsets.UTF_8)
@@ -1271,29 +1274,6 @@ exec "${'$'}PROOT_BIN" --link2symlink --kill-on-exit -0 -r "${'$'}ROOTFS_DIR" -b
     killOrphanEngineProcesses()
   }
 
-  /**
-   * 兜底终结无句柄的引擎孤儿（2026-10 stopEngine 复用提取）：pkill -f bin.js 不可靠
-   * （vivo 对 linker64 包装进程实测不生效，坑 31），再扫 /proc/<pid>/cmdline 匹配
-   * bin.js 特征 kill -9（排除自身 pid；pnpm/脚本子进程不含 bin.js 特征不会误杀）。
-   */
-  private fun killOrphanEngineProcesses() {
-    try {
-      Runtime.getRuntime().exec(arrayOf("/system/bin/pkill", "-f", "bin.js")).waitFor()
-    } catch (_: Throwable) {
-    }
-    try {
-      val myPid = android.os.Process.myPid()
-      File("/proc").listFiles()?.forEach { p ->
-        val pid = p.name.toIntOrNull() ?: return@forEach
-        if (pid == myPid) return@forEach
-        val cmd = try { File(p, "cmdline").readBytes().toString(Charsets.UTF_8) } catch (_: Throwable) { "" }
-        if (cmd.contains("bin.js")) {
-          try { Runtime.getRuntime().exec(arrayOf("/system/bin/kill", "-9", pid.toString())).waitFor() } catch (_: Throwable) {}
-        }
-      }
-    } catch (_: Throwable) {
-    }
-  }
 
   /** Reset the 90s cooldown window: auto-undo (config rollback) or user retry
    *  must be allowed to start the engine immediately. Manual stop already does this. */
@@ -1491,5 +1471,29 @@ exec "${'$'}PROOT_BIN" --link2symlink --kill-on-exit -0 -r "${'$'}ROOTFS_DIR" -b
       sharedPickToken = token
       return token
     }
+    /**
+     * 兜底终结无句柄的引擎孤儿（2026-10 stopEngine 复用提取）：pkill -f bin.js 不可靠
+     * （vivo 对 linker64 包装进程实测不生效，坑 31），再扫 /proc/<pid>/cmdline 匹配
+     * bin.js 特征 kill -9（排除自身 pid；pnpm/脚本子进程不含 bin.js 特征不会误杀）。
+     */
+    fun killOrphanEngineProcesses() {
+      try {
+        Runtime.getRuntime().exec(arrayOf("/system/bin/pkill", "-f", "bin.js")).waitFor()
+      } catch (_: Throwable) {
+      }
+      try {
+        val myPid = android.os.Process.myPid()
+        File("/proc").listFiles()?.forEach { p ->
+          val pid = p.name.toIntOrNull() ?: return@forEach
+          if (pid == myPid) return@forEach
+          val cmd = try { File(p, "cmdline").readBytes().toString(Charsets.UTF_8) } catch (_: Throwable) { "" }
+          if (cmd.contains("bin.js")) {
+            try { Runtime.getRuntime().exec(arrayOf("/system/bin/kill", "-9", pid.toString())).waitFor() } catch (_: Throwable) {}
+          }
+        }
+      } catch (_: Throwable) {
+      }
+    }
+
   }
 }

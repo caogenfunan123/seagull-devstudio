@@ -18,6 +18,7 @@
 // 恢复时优先从 vault 取真实值（与插件 applySnapshot 语义一致），vault 缺失才写占位。
 import { readdirSync, readFileSync, writeFileSync, existsSync, mkdirSync, copyFileSync, rmSync, cpSync } from 'node:fs'
 import { join, basename, dirname, sep, resolve } from 'node:path'
+import { createHash } from 'node:crypto'
 import { homedir } from 'node:os'
 
 const DSH_HOME = process.env.DSH_HOME || join(homedir(), '.dsh')
@@ -84,7 +85,9 @@ function lastGoodSnapshot() {
   const boots = readBootState()
   const at = boots?.lastGoodAt
   const t = typeof at === 'string' ? Date.parse(at) : NaN
-  const snaps = listSnapshots().filter((s) => s.kind === 'auto' && !s.error)
+  // P1-A3（2026-10 专家评审修复）：排除 pre-restore 快照（现约定落 manual kind，
+  // kind==='auto' 已隔离；reason 前缀过滤为纵深防御，防未来布局变动误选）。
+  const snaps = listSnapshots().filter((s) => s.kind === 'auto' && !s.error && !String(s.reason ?? '').startsWith('pre-restore:'))
   if (Number.isNaN(t)) return { snap: snaps[0] ?? null, source: 'fallback-latest' }
   const good = snaps.find((s) => (s.time ? Date.parse(s.time) : NaN) <= t)
   return { snap: good ?? null, source: 'lastGoodAt' }
@@ -112,6 +115,7 @@ function restore(idOrLatest, { pretend = false } = {}) {
   const snapDir = join(root, target.kind, target.id)
   const m = JSON.parse(readFileSync(join(snapDir, 'manifest.json'), 'utf8'))
   console.log(`恢复快照 ${target.id}（${target.kind}，${m.reason ?? '无原因'}）`)
+  if (!pretend) capturePreRestore(m, target.id)
   let restored = 0
   for (const f of m.files ?? []) {
     const dest = destToTarget(f.name)
@@ -163,8 +167,71 @@ function restore(idOrLatest, { pretend = false } = {}) {
     console.log(`  [profile] ${rel} -> ${dest}`)
     restored++
   }
+  // P1-A2（2026-10 专家审查修复）：零还原此前仍打印成功并返回 true——壳侧 UndoGate
+  // 据「完成：还原」判定成功写幂等 marker，恢复实际未发生（快照空/内容缺失）时
+  // 自动回退静默失效。零还原一律判失败。
+  if (restored === 0) {
+    console.log('失败：未还原任何文件（快照为空或内容缺失）。')
+    return false
+  }
   console.log(`完成：还原 ${restored} 项。重启 DSH（壳应用重启引擎）后生效。`)
   return true
+}
+
+/** P1-A4（2026-10 专家审查修复）：restore 前把目标文件当前态捕获为 pre-restore 快照
+ * （kind=manual，reason 前缀 pre-restore:）。恢复动作本身失败时仍可回到当下，
+ * 不再是「恢复不可逆」的单向门。尽力而为：捕获失败不阻断恢复。 */
+function capturePreRestore(m, targetId) {
+  const { root, blobs } = storeDirs()
+  const id = `pre-restore-${targetId}-${Date.now()}`
+  const dir = join(root, 'manual', id)
+  try {
+    const out = { time: new Date().toISOString(), reason: `pre-restore:${targetId}`, files: [], plugins: [], profileFiles: [] }
+    mkdirSync(dir, { recursive: true })
+    if (m.envVaultRefs) out.envVaultRefs = m.envVaultRefs
+    if (m.sensitiveMode) out.sensitiveMode = m.sensitiveMode
+    for (const f of m.files ?? []) {
+      const dest = destToTarget(f.name)
+      if (!dest || !existsSync(dest)) continue
+      copyFileSync(dest, join(dir, f.name))
+      out.files.push({ name: f.name })
+    }
+    for (const p of m.plugins ?? []) {
+      const np = { name: p.name, dir: p.dir, files: [] }
+      const nmIdx = p.dir?.split(sep).lastIndexOf('node_modules')
+      const relNm = nmIdx >= 0 ? p.dir.split(sep).slice(nmIdx + 1).join(sep) : p.name
+      for (const f of p.files ?? []) {
+        const cur = join(PROFILE_ROOT, 'node_modules', relNm, f.path)
+        if (!existsSync(cur)) continue
+        const buf = readFileSync(cur)
+        const hash = createHash('sha1').update(buf).digest('hex')
+        const blob = join(blobs, hash)
+        if (!existsSync(blob)) { mkdirSync(blobs, { recursive: true }); writeFileSync(blob, buf) }
+        np.files.push({ path: f.path, hash })
+      }
+      if (np.files.length) out.plugins.push(np)
+    }
+    for (const f of m.profileFiles ?? []) {
+      const rel = f.path.startsWith('./') ? f.path.slice(2) : f.path
+      const cur = join(PROFILE_ROOT, rel)
+      if (!existsSync(cur)) continue
+      const buf = readFileSync(cur)
+      const hash = createHash('sha1').update(buf).digest('hex')
+      const blob = join(blobs, hash)
+      if (!existsSync(blob)) { mkdirSync(blobs, { recursive: true }); writeFileSync(blob, buf) }
+      out.profileFiles.push({ path: f.path, hash })
+    }
+    if (!out.files.length && !out.plugins.length && !out.profileFiles.length) {
+      rmSync(dir, { recursive: true, force: true })
+      console.log('  pre-restore 快照跳过：无可捕获的现存文件')
+      return
+    }
+    writeFileSync(join(dir, 'manifest.json'), JSON.stringify(out, null, 2))
+    console.log(`  已创建 pre-restore 快照 ${id}（恢复失败时可手动回退）`)
+  } catch (e) {
+    console.log(`  pre-restore 快照失败（继续恢复）：${e?.message ?? e}`)
+    try { rmSync(dir, { recursive: true, force: true }) } catch {}
+  }
 }
 
 /** restore-last-good：boot-state.json 归因 → 最后良好快照 → 恢复。 */

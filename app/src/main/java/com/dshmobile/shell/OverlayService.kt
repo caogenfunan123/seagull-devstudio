@@ -463,8 +463,12 @@ class OverlayService : Service() {
 
   private fun probeEngine() {
     Thread {
-      val running = EngineProbe.check().optBoolean("running", false)
-      main.post { engineRunning = running }
+      try {
+        val running = EngineProbe.check().optBoolean("running", false)
+        main.post { engineRunning = running }
+      } catch (e: Exception) {
+        Log.w("dsh-overlay", "probeEngine thread died: " + (e.message ?: e.javaClass.simpleName))
+      }
     }.start()
   }
 
@@ -473,9 +477,9 @@ class OverlayService : Service() {
     probeHandle?.let { main.removeCallbacks(it) }
     probeHandle = Runnable {
       probeEngine()
-      if (panelView != null) main.postDelayed(probeHandle!!, 10_000)
+      if (panelView != null) probeHandle?.let { main.postDelayed(it, 10_000) }
     }
-    main.postDelayed(probeHandle!!, 10_000)
+    probeHandle?.let { main.postDelayed(it, 10_000) }
   }
 
   /** 停止当前轮次：POST /api/session.cancel（与 Web UI 停止同通道，全信封）。 */

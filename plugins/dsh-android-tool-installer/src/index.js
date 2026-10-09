@@ -18,6 +18,10 @@ import { defineTool } from '@deepseek-ai/dsh-tools';
 
 const execFileAsync = promisify(execFile);
 
+// S2（2026-10 结构性修复）：install() 并发互斥 + 幂等判定（进程内 Map 锁）。
+const installing = new Map();  // toolName -> Promise
+
+
 // 运行时前缀由引擎 shellEnv() 注入（TERMUX__PREFIX/PREFIX），回退到本 fork 安装包路径。
 // 本 fork applicationId = com.dsharnessmobile.shell（编译安装后即此路径）。
 function runtimePrefix() {
@@ -269,6 +273,10 @@ function buildService() {
     async install(name, opts = {}) {
       const info = TOOL_REGISTRY[name];
       if (!info) return { ok: false, error: 'Unknown tool: ' + name };
+      // S2 并发互斥：已有进行中的安装，等待其完成（避免互相踩下载/解压目录）
+      if (installing.has(name)) {
+        try { await installing.get(name); } catch {}
+      }
       if (existsSync(info.installPath) && !opts.force) return { ok: true, alreadyInstalled: true };
       if (opts.force && existsSync(info.installPath)) {
         const { rmSync } = await import('node:fs');
@@ -276,6 +284,9 @@ function buildService() {
       }
       const dl = info.installPath + '.download';
       beginTask(name);
+      // S2 设置锁（Promise 作为值，供后续并发者 await）
+      let release;
+      installing.set(name, new Promise((resolve) => { release = resolve; }));
       try {
         await downloadWithMirrors(info.source, dl, (received, total) => setProgress(received, total));
         if (info.sha256 && !info.sha256.startsWith('__')) {
@@ -298,14 +309,22 @@ function buildService() {
         } else {
           setPhase('extracting');
           const r = await extractArchive(dl, info.installPath, kind, info.stripComponents || 0);
-          if (!r.ok) { finishTask(r.error); return r; }
+          if (!r.ok) {
+            // P1-P1（2026-10 专家评审修复）：解压失败清理残留目录，避免下次 existsSync 误判已装
+            const { rmSync } = await import('node:fs');
+            try { rmSync(info.installPath, { recursive: true, force: true }); } catch {}
+            finishTask(r.error);
+            return r;
+          }
           const { unlinkSync } = await import('node:fs');
           try { unlinkSync(dl); } catch {}
         }
         finishTask();
+        release();
         return { ok: true, installed: true, path: info.installPath };
       } catch (err) {
         finishTask(err.message);
+        release();
         return { ok: false, error: err.message };
       }
     },

@@ -548,6 +548,9 @@ class MainActivity : ComponentActivity() {
   /**
    * 文件直达（0.13.0 F5/M3.5）：VIEW/SEND 意图 → 校验净化 → 拷贝临时工作区 → 通知引擎侧插件。
    * 外部路径不留原件引用（一律拷贝，权限模型对齐 F1.8）；引擎未启动先启动（启动流先于通知）。
+   * P0-1（2026-10 专家审查修复）：整个链路（TTL 清扫目录遍历 + 200MB 有界拷贝）此前在主线程
+   * 同步执行——相机原图 10-30MB 即卡主线程数秒，大文件直触发 ANR。现全部移后台线程，
+   * UI 反馈（通知）线程安全。
    */
   private fun maybeProcessIncoming(intent: Intent?) {
     if (intent == null) return
@@ -558,20 +561,21 @@ class MainActivity : ComponentActivity() {
       else -> null
     }
     if (uri == null) return
-    // 每次文件入队前先做 TTL 清扫（issue #60 F5.1：临时文件 7 天自动回收，防止无限堆积）
-    FileIncoming.sweepExpired(this)
-    val validated = FileIncoming.validate(uri.toString(), this) ?: run {
-      showTestNotification("文件直达被拒绝", "路径不在允许范围（仅系统打开/分享的真实路径）")
-      return
-    }
-    val target = FileIncoming.copyIn(this, validated) ?: run {
-      showTestNotification("文件拷贝失败", "无法读取传入文件")
-      return
-    }
-    FileIncoming.recordOpening(this, target.absolutePath)
-    LogCollector.log("dsh-file-open", "incoming processed: " + target.absolutePath)
-    // 引擎侧插件端点：路径交给 dsh-android-file-open 强制新会话（引擎未起时端点由启动流承托）。
     Thread {
+      try {
+        // 每次文件入队前先做 TTL 清扫（issue #60 F5.1：临时文件 7 天自动回收，防止无限堆积）
+        FileIncoming.sweepExpired(this)
+      val validated = FileIncoming.validate(uri.toString(), this) ?: run {
+        showTestNotification("文件直达被拒绝", "路径不在允许范围（仅系统打开/分享的真实路径）")
+        return@Thread
+      }
+      val target = FileIncoming.copyIn(this, validated) ?: run {
+        showTestNotification("文件拷贝失败", "无法读取传入文件")
+        return@Thread
+      }
+      FileIncoming.recordOpening(this, target.absolutePath)
+      LogCollector.log("dsh-file-open", "incoming processed: " + target.absolutePath)
+      // 引擎侧插件端点：路径交给 dsh-android-file-open 强制新会话（引擎未起时端点由启动流承托）。
       try {
         val conn = java.net.URL(EngineProbe.ENGINE_URL + "/api/android/file-incoming").openConnection() as java.net.HttpURLConnection
         conn.requestMethod = "POST"
@@ -582,6 +586,9 @@ class MainActivity : ComponentActivity() {
         conn.responseCode
         conn.disconnect()
       } catch (_: Exception) {
+      }
+      } catch (e: Exception) {
+        LogCollector.log("dsh-file-open", "incoming thread died: " + (e.message ?: e.javaClass.simpleName))
       }
     }.start()
   }
@@ -626,8 +633,11 @@ class MainActivity : ComponentActivity() {
     // Back from the directory picker / Termux: re-route if the engine came up.
     // 仅当 WebView 未展示（引导页/首次启动）时才探测并重路由；相册/文件选择器
     // 返回时 WebView 已可见，探测超时会误触发 showWeb→reload，导致 JS 状态丢失。
+    // P1-K1（2026-10 复盘）：此处曾有主线程同步 EngineProbe.check()（有界 connect/read
+    // 仍可达 ~800ms，网络异常路径更久）——直接交 startEngineFlow（内部已在后台线程探测，
+    // 引擎已起则 showWeb 重路由，未起则走启动流，语义等价且无主线程阻塞）。
     if (::chrome.isInitialized) refreshGuideMeta()
-    if (!userClosedEngine && webView.visibility != View.VISIBLE && !EngineProbe.check().optBoolean("running", false)) startEngineFlow()
+    if (!userClosedEngine && webView.visibility != View.VISIBLE) startEngineFlow()
     // 主题补推：从系统设置/SAF 返回时系统主题可能已变（兜底桥时序覆盖）。
     if (::webView.isInitialized) {
       pushSystemDark(webView)
@@ -1412,7 +1422,8 @@ class MainActivity : ComponentActivity() {
     if (Build.VERSION.SDK_INT >= 33 &&
       checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
     ) {
-      notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+      // P0-1 配套：本方法现可从后台线程调用（文件直达链路已移后台），launch 须在主线程。
+      runOnUiThread { notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS) }
       return
     }
     val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
@@ -1930,13 +1941,12 @@ class MainActivity : ComponentActivity() {
     EngineService.userShutdown = false
     Thread {
       try {
-        try {
-          Runtime.getRuntime().exec(arrayOf("/system/bin/pkill", "-f", "bin.js")).waitFor()
-        } catch (_: Throwable) {
-        }
+        // P1-K2（2026-10 专家审查修复）：裸 pkill 对 vivo linker64 包装进程不生效（坑 31）——
+        // 复用 EngineManager 的 /proc cmdline 扫描 kill -9 兜底，杀净孤儿再重启。
+        EngineManager.killOrphanEngineProcesses()
         EngineManager.lastStartAttemptAt = 0
         engineFlowRunning.set(false)
-        LogCollector.log("dsh-shell", "restart engine requested (pkill)")
+        LogCollector.log("dsh-shell", "restart engine requested (orphan scan kill)")
         Thread.sleep(1000)
         runOnUiThread {
           showTestNotification("引擎重启中", "引擎进程已结束，正在重新启动…")

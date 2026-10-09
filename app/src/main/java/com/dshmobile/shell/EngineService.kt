@@ -106,13 +106,18 @@ class EngineService : Service() {
             if (UndoGate.onProbeFailure(this, WatchdogV2.consecutiveFailures)) {
               LogCollector.log("dsh-watchdog", "auto-undo trigger: cons_fail=" + WatchdogV2.consecutiveFailures)
               Thread {
-                val result = UndoGate.execute(this, engineManager)
-                if (result.executed) {
-                  LogCollector.log("dsh-watchdog", "auto-undo ok -> " + (result.snapshotId ?: "?"))
-                  engineManager.resetCooldown()
-                  engineManager.startEngine()
-                } else {
-                  LogCollector.log("dsh-watchdog", "auto-undo not executed: " + result.summary.take(160))
+                // S5（2026-10 结构性修复）：daemon 线程顶层 try/catch 兜底，避免未捕获异常静默杀死线程
+                try {
+                  val result = UndoGate.execute(this, engineManager)
+                  if (result.executed) {
+                    LogCollector.log("dsh-watchdog", "auto-undo ok -> " + (result.snapshotId ?: "?"))
+                    engineManager.resetCooldown()
+                    engineManager.startEngine()
+                  } else {
+                    LogCollector.log("dsh-watchdog", "auto-undo not executed: " + result.summary.take(160))
+                  }
+                } catch (e: Exception) {
+                  LogCollector.log("dsh-watchdog", "auto-undo thread died: " + (e.message ?: e.javaClass.simpleName))
                 }
               }.start()
             }

@@ -106,10 +106,14 @@ async function tarRestore(archivePath) {
   const root = dshRoot();
   const plainTar = join(dirname(archivePath), basename(archivePath).replace(/\.tar\.gz$/, '.tar'));
   try { rmSync(plainTar, { force: true }); } catch { /* 残留清理 */ }
-  // gzip 解压走 node:zlib（引擎进程内零外部依赖；tar.real -z 与独立 gzip 管道均绕开）
-  const { gunzipSync } = await import('node:zlib');
-  const raw = gunzipSync(readFileSync(archivePath));
-  writeFileSync(plainTar, raw);
+  // S3（2026-10 结构性修复）：gunzipSync 全内存——恶意/损坏 zip 炸弹可打爆堆。
+  // 改流式 gunzip：createReadStream → createGunzip → createWriteStream（峰值仅管道缓冲）。
+  const { createGunzip } = await import('node:zlib');
+  await new Promise((resolve, reject) => {
+    createReadStream(archivePath).on('error', reject)
+      .pipe(createGunzip()).on('error', reject)
+      .pipe(createWriteStream(plainTar)).on('error', reject).on('finish', resolve);
+  });
   const { stdout } = await execFileAsync('tar', ['-tf', plainTar], { env: execEnv(), timeout: 5 * 60_000, maxBuffer: 4 * 1024 * 1024 });
   const members = stdout.trim().split('\n').filter(Boolean);
   if (!members.length) throw new Error('归档为空或损坏');

@@ -48,10 +48,15 @@ object FileIncoming {
     return uri
   }
 
-  /** 文件名净化：非法字符替换、百分号解码、长度截断（255 字节边界 + 哈希后缀）。 */
+  /** 文件名净化：非法字符替换、百分号解码、长度截断（255 字节边界 + 哈希后缀）。
+   *  路径穿越防护（P0-2 修复）：先剥路径分隔符与点段——DISPLAY_NAME 是外部应用可控输入，
+   *  `..%2F..%2F.dsh%2Fsettings.yaml` 解码后即路径注入，必须先扁平化再落盘。 */
   fun sanitizeName(raw: String): String {
     val decoded = try { URLDecoder.decode(raw, "UTF-8") } catch (_: Exception) { raw }
     val cleaned = decoded
+      .replace('/', '_')
+      .replace('\\', '_')
+      .replace(Regex("(^|\\.)\\.(?=\\.|$|_)"), "__")
       .replace(Regex("[?*|:\\\"<>]"), "_")
       .replace(Regex("[\\u0000-\\u001f]"), "")
       .trim()
@@ -92,6 +97,8 @@ object FileIncoming {
       val display = queryDisplayName(context, uri) ?: "file"
       val name = uniqueName(dir, sanitizeName(display))
       val target = File(dir, name)
+      // 纵深防御（P0-2）：落点必须仍在临时工作区内（净化后 name 已扁平，此处兜底）
+      if (target.canonicalFile.parentFile?.canonicalPath != dir.canonicalFile.canonicalPath) return null
       val input = context.contentResolver.openInputStream(uri) ?: return null
       input.use { ins ->
         // 有界拷贝（R17：大小上限；防御流式读取绕过 SIZE 列声明）

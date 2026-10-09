@@ -89,10 +89,18 @@ if (existsSync(rootfs)) {
   // 键去重 + 剔除 path=''（顶层目录条目本身剥离后不落地）——壳侧 walkTopDown 按「路径」计数，
   // tar 若含重复/冗余目录条目，按「成员数」对账会系统性虚高（轻资产 +8 附加文件尚能掩盖，
   // 真 rootfs ~17k 成员下任何超额的重复条目都会把完整解压误判为「解一半」永不自愈）。
+  // P1-B3（2026-10 专家评审修复）：fileBytes 与 members 同口径——均按唯一路径计。
+  // 旧实现 members 用 uniquePaths（去重），fileBytes 用 norm（可能含重复路径）——tar 若有
+  // 重复条目，字节数虚高。改为先按路径去重再求和。
   const uniquePaths = new Set(norm.map((m) => m.path).filter((p) => p !== ''))
+  const uniqueNorm = norm.filter((m) => m.path !== '' && uniquePaths.has(m.path))
+  // 二次去重：Set.has 只判存在，不保证每个 path 只出现一次——用 Map 按 path 保留首个
+  const seen = new Map()
+  for (const m of uniqueNorm) if (!seen.has(m.path)) seen.set(m.path, m)
+  const deduped = Array.from(seen.values())
   manifest.rootfsStats['ubuntu-rootfs.tar.xz'] = {
     members: uniquePaths.size,
-    fileBytes: norm.reduce((a, m) => a + (m.type === 'f' ? m.size : 0), 0),
+    fileBytes: deduped.reduce((a, m) => a + (m.type === 'f' ? m.size : 0), 0),
   }
   console.log(`[asset-manifest] rootfs probes=${Object.keys(manifest.probes).length} ` +
     `members=${manifest.rootfsStats['ubuntu-rootfs.tar.xz'].members}`)

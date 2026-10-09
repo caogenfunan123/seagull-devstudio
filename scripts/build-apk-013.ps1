@@ -17,6 +17,10 @@ if (-not $VerBase) { Write-Host "无法从 build.gradle.kts 读取 versionName�
 $Out = Join-Path $Root "out\v$VerBase"
 New-Item -ItemType Directory -Force -Path $Out | Out-Null
 
+# P0-3（2026-10 专家审查修复）：假成功链——此前所有门禁失败分支统一 continue，
+# 循环末尾无条件打「=== 完成 ===」且 exit 0：缺快照/缺插件源/校验失败/门禁异常全部
+# 静默吞掉，产物照常打出。现统一聚合 $failed，末尾非空即列出全部失败项并 exit 1。
+$failed = @()
 $pluginDirs = @(
     (Join-Path $Root "dsh-shell-termux"),
     (Join-Path $Root "dsh-client-ui-responsive"),
@@ -45,8 +49,8 @@ $pluginDirs = @(
 foreach ($abi in @('arm64')) {
     if ($OnlyAbi -and $OnlyAbi -ne $abi) { continue }
     $snap = Join-Path $Root ".deploy-tmp\snapshot-013\$abi\snapshot.tar.xz"
-    if (-not (Test-Path $snap)) { Write-Host "缺快照 $snap（先跑 build-snapshot-013.mjs）"; continue }
-    $work = Join-Path $Root ".deploy-tmp\build-\13-$abi"
+    if (-not (Test-Path $snap)) { Write-Host "缺快照 $snap（先跑 build-snapshot-013.mjs）"; $failed += "[$abi] 缺快照"; continue }
+    $work = Join-Path $Root ".deploy-tmp\build-013-$abi"
     New-Item -ItemType Directory -Force -Path $work | Out-Null
 
     # 1. 插件注入（@dsh-android 专用 + 通用根级包）
@@ -54,7 +58,7 @@ foreach ($abi in @('arm64')) {
         # 插件 build/校验（2026-10-08 复盘修复：ps1 原无此段——本地漏跑 npm run build
         # 时注入的是陈旧/缺失 lib/，快照静默缺能力，与 build-apk.mjs 的 requires 门禁不对称）
         foreach ($p in $pluginDirs) {
-            if (-not (Test-Path (Join-Path $p "package.json"))) { Write-Host "缺插件源 $p"; continue }
+            if (-not (Test-Path (Join-Path $p "package.json"))) { Write-Host "缺插件源 $p"; $failed += "[$abi] 缺插件源 $p"; continue }
             $lib = Join-Path $p "lib\index.js"
             # mtime 陈旧检测（2026-10 第三轮复盘 P2）：原实现仅 lib 缺失才构建——改源码忘
             # build 时本地注入陈旧 lib/ 且无任何提示（CI 路径总是全量重建，两侧不对称）。
@@ -72,7 +76,7 @@ foreach ($abi in @('arm64')) {
                 Push-Location $p
                 npm run build 2>&1 | Select-Object -Last 2
                 Pop-Location
-                if (-not (Test-Path $lib)) { Write-Host "插件 build 失败，拒绝打包（$abi）: $p"; exit 1 }
+                if (-not (Test-Path $lib)) { Write-Host "插件 build 失败，拒绝打包（$abi）: $p"; $failed += "[$abi] 插件 build 失败 $p"; continue }
             }
         }
         New-Item -ItemType Directory -Force -Path (Join-Path $Root ".deploy-tmp\plugins") | Out-Null
@@ -82,38 +86,42 @@ foreach ($abi in @('arm64')) {
         # marketplace 注入源：vendor/dshmarketplace-plugin（固化修复版，见其 PATCHES.md——
         # 上游 0.1.5 pre-execute 守卫不调 next() 导致全工具崩溃；build 前强制校验修复在场）
         $market = Join-Path $Root "vendor\dshmarketplace-plugin"
-        if (-not (Test-Path (Join-Path $undo "package.json"))) { Write-Host "缺 undo 注入源 $undo（git clone lire1131/dsh-undo-savepoint）"; continue }
-        if (-not (Test-Path (Join-Path $market "package.json"))) { Write-Host "缺 marketplace 注入源 $market（vendor 固化副本）"; continue }
+        if (-not (Test-Path (Join-Path $undo "package.json"))) { Write-Host "缺 undo 注入源 $undo（git clone lire1131/dsh-undo-savepoint）"; $failed += "[$abi] 缺 undo 注入源" }
+        if (-not (Test-Path (Join-Path $market "package.json"))) { Write-Host "缺 marketplace 注入源 $market（vendor 固化副本）"; $failed += "[$abi] 缺 marketplace 注入源" }
+        if ($failed.Count -gt 0) { continue }
         # marketplace 修复门禁：非修复版直接拒绝打包（幂等脚本，输出 already fixed / patched ok 即通过）
         node (Join-Path $Root "scripts\patch-marketplace.mjs") (Join-Path $market "lib\index.js") 2>&1 | Select-Object -First 2
-        if ($LASTEXITCODE -ne 0) { Write-Host "marketplace 修复校验失败，拒绝打包（$abi）"; continue }
+        if ($LASTEXITCODE -ne 0) { Write-Host "marketplace 修复校验失败，拒绝打包（$abi）"; $failed += "[$abi] marketplace 修复校验失败"; continue }
         # undo 移动端适配门禁：非裁剪版（含快捷键行/全局键盘监听）直接拒绝打包
         node (Join-Path $Root "scripts\patch-undo-mobile.mjs") (Join-Path $undo "lib\client.js") --check 2>&1 | Select-Object -First 2
-        if ($LASTEXITCODE -ne 0) { Write-Host "undo 移动端裁剪校验失败，拒绝打包（$abi）"; continue }
+        if ($LASTEXITCODE -ne 0) { Write-Host "undo 移动端裁剪校验失败，拒绝打包（$abi）"; $failed += "[$abi] undo 裁剪校验失败"; continue }
         Write-Host "== 注入 @dsh-android 插件（$abi）=="
         python (Join-Path $Root "scripts\inject-snapshot.py") $snap (Join-Path $work "snap-injected.tar.xz") @pluginDirs | Select-Object -Last 2
+        if ($LASTEXITCODE -ne 0) { Write-Host "插件注入失败，拒绝打包（$abi）"; $failed += "[$abi] inject-snapshot 失败"; continue }
         Write-Host "== 注入根级插件（undo/market）=="
         python (Join-Path $Root "scripts\inject-external-plugins.py") (Join-Path $work "snap-injected.tar.xz") (Join-Path $work "snap-final.tar.xz") $undo $market | Select-Object -Last 2
+        if ($LASTEXITCODE -ne 0) { Write-Host "根级插件注入失败，拒绝打包（$abi）"; $failed += "[$abi] inject-external-plugins 失败"; continue }
         # 权威装配覆盖（C2 修复 2026-08-23）：update-snapshot-patch.py 此前是手工步骤，
         # snap-final 停留在 0.12.5 旧装配（缺 undo/market/bridge）。接入自动化，保证
         # 出品的快照 patch === scripts/profile-web.cordis.patch.yml 的当前权威版。
         Write-Host "== 权威 patch 覆盖（$abi）=="
         python (Join-Path $Root "scripts\update-snapshot-patch.py") (Join-Path $work "snap-final.tar.xz") (Join-Path $work "snap-final2.tar.xz") (Join-Path $Root "scripts\profile-web.cordis.patch.yml") | Select-Object -Last 2
+        if ($LASTEXITCODE -ne 0) { Write-Host "权威 patch 覆盖失败，拒绝打包（$abi）"; $failed += "[$abi] update-snapshot-patch 失败"; continue }
         # 防回归（审校 C4 2026-08-23）：patch 挂载集 ⊇ 注入集——缺条目（如 linux-env 漏挂）直接拒打包
         Write-Host "== 挂载集校验（$abi）=="
         node (Join-Path $Root "scripts\check-patch-mounts.mjs") (Join-Path $Root "scripts\profile-web.cordis.patch.yml") @pluginDirs $undo $market 2>&1 | Select-Object -First 4
-        if ($LASTEXITCODE -ne 0) { Write-Host "patch 挂载集校验失败，拒绝打包（$abi）"; continue }
+        if ($LASTEXITCODE -ne 0) { Write-Host "patch 挂载集校验失败，拒绝打包（$abi）"; $failed += "[$abi] 挂载集校验失败"; continue }
         $snapIn = Join-Path $work "snap-final2.tar.xz"
     } else {
         $snapIn = $snap
     }
 
-    # 2. 门禁（关键工具存在性 + ELF 架构 + 🔒 机密 + GPL 合规）
+    # 2. 门禁（关键工具存在性 + ELF 架构 + 机密 + GPL 合规）
     Write-Host "== 门禁（$abi）=="
     # 第三方许可合规（GPL 义务 A1/A2 门禁 2026-08-23）：copyleft 包许可证全文须随快照分发，
     # 矩阵须覆盖 dpkg status 全部包；缺失直接拒绝打包（--- tar 视图：9p 权限不影响判定）。
     node (Join-Path $Root "scripts\check-third-party.mjs") (Join-Path $work "x") --tar $snapIn 2>&1 | Select-Object -First 4
-    if ($LASTEXITCODE -ne 0) { Write-Host "THIRD-PARTY CHECK FAILED，拒绝打包（$abi）"; continue }
+    if ($LASTEXITCODE -ne 0) { Write-Host "THIRD-PARTY CHECK FAILED，拒绝打包（$abi）"; $failed += "[$abi] third-party 合规失败"; continue }
     # 许可资产（LICENSES 标准文本 + notices）打入 APK assets（A2：随包分发）
     $licAssets = Join-Path $apkDir "app\src\main\assets\licenses"
     New-Item -ItemType Directory -Force -Path $licAssets | Out-Null
@@ -122,21 +130,25 @@ foreach ($abi in @('arm64')) {
     Write-Host "== 许可资产就位（$abi）=="
     # 注：check-snapshot-secrets.ps1 内部走 cmd /c tar，外层 $LASTEXITCODE 不可靠
     # （反映 cmd 尾命令而非脚本 exit 码——PASSED 时可能残留 1 造成误判 continue）。
-    # 以脚本输出标记为准。
+    # 以脚本输出标记为准。P0-3 修复：输出异常（既非 PASSED 也非 FAIL）不再只打印——
+    # 记入失败（门禁失明与门禁失败同样不可出包）。
     $secretResult = & node (Join-Path $Root "scripts\check-snapshot-secrets.mjs") $snapIn 2>&1 | Out-String
     if ($secretResult -match 'FAIL\[' -or $secretResult -match 'CHECK_FAILED') {
         Write-Host "SNAPSHOT_SECRET_CHECK_FAILED（$abi）：快照含机密，拒绝打包"
         ($secretResult -split "`n") | Select-Object -First 6
+        $failed += "[$abi] 快照机密校验失败"
         continue
     }
     if ($secretResult -notmatch 'CHECK_PASSED') {
         Write-Host "gate 输出异常（$abi）：$($secretResult.Trim())"
+        $failed += "[$abi] 快照机密校验输出异常"
+        continue
     }
     $wslPath = $snapIn.Replace('D:', '/mnt/d').Replace('\', '/')
     $wslCmd = "tar -tf `"$wslPath`" | grep -cE '^usr/bin/(node|bash|rg|python|perl|ruby|zip|vim|zsh|openssl|socat|busybox)$'; tar -tf `"$wslPath`" | grep -c '^-'"
     wsl -e bash -lc $wslCmd 2>$null | Select-Object -First 2
     node (Join-Path $Root "scripts\elf-check.mjs") $snapIn $abi 2>&1 | Select-Object -First 3
-    if ($LASTEXITCODE -ne 0) { Write-Host "ELF 架构校验失败，拒绝打包（$abi）"; continue }
+    if ($LASTEXITCODE -ne 0) { Write-Host "ELF 架构校验失败，拒绝打包（$abi）"; $failed += "[$abi] ELF 架构校验失败"; continue }
 
     # 3. 双 ABI APK（cp 快照 + 指纹 → gradle assembleDebug）
     Write-Host "== 构建 APK（$abi, suffix=$Suffix）=="
@@ -151,7 +163,7 @@ foreach ($abi in @('arm64')) {
     # 产物无 asset-manifest.json，EngineManager.extractToolAssetsLocked 静默回退 legacy exists
     # 路径，坑 44「半份永久定格」防护在本地构建整体失效，与 CI 保护级别不对称。
     node (Join-Path $Root "scripts\gen-asset-manifest.mjs") (Join-Path $apkDir "app\src\main\assets") 2>&1 | Select-Object -Last 3
-    if ($LASTEXITCODE -ne 0) { Write-Host "资产清单生成失败，拒绝打包（$abi）"; continue }
+    if ($LASTEXITCODE -ne 0) { Write-Host "资产清单生成失败，拒绝打包（$abi）"; $failed += "[$abi] 资产清单生成失败"; continue }
     Push-Location $apkDir
     try {
         & .\gradlew :app:assembleDebug --no-daemon -PversionNameSuffix="$Suffix" 2>&1 | Select-Object -Last 4
@@ -159,8 +171,17 @@ foreach ($abi in @('arm64')) {
         $ver = "$VerBase$Suffix"
         Copy-Item "app\build\outputs\apk\debug\app-debug.apk" (Join-Path $Out "dsh-mobile-apk-v$ver-$abi.apk") -Force
         Write-Host "产物: $Out\dsh-mobile-apk-v$ver-$abi.apk"
+    } catch {
+        Write-Host "gradle 构建失败（$abi）：$_"
+        $failed += "[$abi] gradle 构建失败"
     } finally {
         Pop-Location
     }
+}
+# P0-3：失败聚合判定——存在任一失败即非零退出，杜绝「全 continue + 完成 exit 0」假成功。
+if ($failed.Count -gt 0) {
+    Write-Host "=== 构建失败，共 $($failed.Count) 项：==="
+    $failed | ForEach-Object { Write-Host "  - $_" }
+    exit 1
 }
 Write-Host "=== 完成。产物目录：$Out ==="

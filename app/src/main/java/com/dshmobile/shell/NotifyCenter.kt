@@ -60,7 +60,7 @@ object NotifyCenter {
       return // 未授予：静默降级（调用方界面内提示；不崩溃）
     }
     val manager = app.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-    val channelId = channelIds[category] ?: channelIds["task"]!!
+    val channelId = channelIds[category] ?: channelIds["task"] ?: "dsh-task"
     if (Build.VERSION.SDK_INT >= 26) {
       val label = when (category) {
         "auth" -> "需要授权"
