@@ -10,6 +10,14 @@
  * danger-full-access 注入全量（技术场景行为零变化），其余档位只注 core
  * （省 ~9.7K 字符/轮）。档位读不到或任何异常一律回退全量——绝不让装配降级
  * 成「人格残缺」，try/catch 与存在性检查双兜底。
+ *
+ * 2026-10 工具面裁剪（额度优化 #1）：新会话工具面实测 89 个（约 14K 字符/轮
+ * 固定开销），其中 22 个 root/ADB 通道工具在非 danger-full-access 档位下
+ * gateFor 必拒——schema 纯占每轮 token。经 ctx.on('agent/created') 在首轮
+ * prompt assembly 前对 agent scope 挂 tools.restrict({ deny })，并监听
+ * sandbox/mode / permission/preset 会话事件动态跟随档位切换（切回 danger
+ * 即解除，功能零回归）。裁剪与 persona 分层共用同一档位判据（sandboxPolicy
+ * resolve + permissionPresets.defaultPreset 兜底，与 bridge gateFor 同源）。
  */
 import { readFileSync, existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -48,6 +56,23 @@ const personaText = readFirst(fullPaths);
 const personaCoreText = readFirst(corePaths);
 console.log('[dsh-android-seagull] persona loaded: full=' + personaText.length + ' chars, core=' + personaCoreText.length + ' chars');
 
+// root/ADB 通道工具名单（非 danger 档位 deny 集）——全部经 gateFor 前置校验，
+// 非 danger-full-access 会话中调用必被拒，schema 属纯 token 开销：
+// - root-ops 10 个：root 通道（su/KernelSU），root 感知说明也仅 danger 注入；
+// - manage 8 个：androidPrivilege ADB 通道（screencap/uiautomator/dumpsys/input）；
+// - bridge 2 个 ADB 执行面（android_privilege_status 为只读状态查询，保留不裁）；
+// - ubuntu_toolchain_install：root chroot apt（坑 13/38 root 专属路径）；
+// - apk_install：root 通道 su -c pm install（apk-tools 其余 6 个走宿主 java 链，保留）。
+const DANGER_CHANNEL_TOOLS = [
+  'root_exec', 'device_ui_control', 'root_status', 'root_ls', 'root_cat',
+  'root_push', 'root_pull', 'root_fetch', 'root_deploy', 'ubuntu_boot_fix',
+  'android_act_input', 'android_device_info', 'android_screenshot',
+  'android_ui_click', 'android_ui_dump', 'android_ui_input',
+  'android_ui_scroll', 'android_ui_tree',
+  'android_adb_shell_exec', 'android_termux_channel_exec',
+  'ubuntu_toolchain_install', 'apk_install',
+];
+
 export function apply(ctx) {
   ctx.on('system-prompt/assemble', (assembly, _context, next) => {
     try {
@@ -70,6 +95,83 @@ export function apply(ctx) {
     } catch (_e) { console.error('[dsh-android-seagull] assemble error:', _e); }
     return next();
   });
+
+  // ---- 工具面裁剪（档位感知，动态跟随）----
+  const restrictedAgents = new Map(); // agent -> restrict disposer
+
+  // 档位判据与 bridge gateFor 同源：sandboxPolicy.resolve({session}) 优先
+  // （读会话 sandbox/mode 事件投影，回退部署默认），permissionPresets.defaultPreset 兜底。
+  const sessionMode = (agent) => {
+    try {
+      const policy = ctx.get('sandboxPolicy');
+      if (policy && typeof policy.resolve === 'function') {
+        const mode = policy.resolve({ session: agent?.session })?.mode;
+        if (mode) return mode;
+      }
+    } catch (_e) { /* fall through */ }
+    try {
+      return ctx.get('permissionPresets')?.defaultPreset || undefined;
+    } catch (_e2) {
+      return undefined;
+    }
+  };
+
+  // 幂等：先解除既有 restriction 再按当前档位重判——档位切换与重复事件都安全。
+  // 档位读不到 / tools face 缺失 / 工具名单拿不到 → 不裁剪（fail-open：宁可多给
+  // 工具不少给，功能零回归，优化失效而已）；deny 与已注册工具取交集，marketplace
+  // 卸载某插件时不会因 unknown name throw。
+  const applyToolPolicy = (agent) => {
+    try {
+      const prev = restrictedAgents.get(agent);
+      if (prev) {
+        try { prev(); } catch (_e) { /* already disposed */ }
+        restrictedAgents.delete(agent);
+      }
+      if (sessionMode(agent) === 'danger-full-access') return;
+      const tools = ctx.get('tools');
+      if (!tools || typeof tools.schemas !== 'function' || typeof agent?.ctx?.tools?.restrict !== 'function') return;
+      let known;
+      try {
+        known = new Set(tools.schemas(agent).map((t) => t.name));
+      } catch (_e2) {
+        return;
+      }
+      if (known.size === 0) return;
+      const deny = DANGER_CHANNEL_TOOLS.filter((n) => known.has(n));
+      if (deny.length === 0) return;
+      const dispose = agent.ctx.tools.restrict({ deny });
+      restrictedAgents.set(agent, dispose);
+      console.log('[dsh-android-seagull] tool policy: denied ' + deny.length + '/' + DANGER_CHANNEL_TOOLS.length
+        + ' danger-channel tools (agent=' + (agent?.id ?? 'unknown') + ')');
+    } catch (_e) {
+      console.error('[dsh-android-seagull] tool policy error:', _e);
+    }
+  };
+
+  // agent/created 在首轮 prompt assembly 之前发出且为 serial await——在此挂
+  // restriction 保证首个 LLM 请求的 tools 列表已裁剪。
+  ctx.on('agent/created', async ({ agent }) => { applyToolPolicy(agent); });
+  ctx.on('agent/disposed', ({ agent }) => {
+    const d = restrictedAgents.get(agent);
+    if (d) {
+      try { d(); } catch (_e) { /* scope unwind already disposed */ }
+      restrictedAgents.delete(agent);
+    }
+  });
+  // 档位切换动态跟随：UI 档位选择器写 sandbox/mode，/permission 命令写
+  // permission/preset——事件提交后投影已 fold，按新档位 dispose+重判。
+  ctx.on('session/event', (session, event) => {
+    try {
+      if (!event || (event.type !== 'sandbox/mode' && event.type !== 'permission/preset')) return;
+      for (const agent of (ctx.agents?.list?.() ?? [])) {
+        if (agent?.session === session) applyToolPolicy(agent);
+      }
+    } catch (_e) { /* ignore */ }
+  });
+  // 热加载兜底：插件装载时已存在的 agent（引擎重启后快照热装配路径）。
+  try {
+    for (const agent of (ctx.agents?.list?.() ?? [])) applyToolPolicy(agent);
+  } catch (_e) { /* ignore */ }
 }
 
 export { name };
