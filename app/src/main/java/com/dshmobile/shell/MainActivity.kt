@@ -1670,6 +1670,24 @@ class MainActivity : ComponentActivity() {
     maybeAutoUndo(generation)
   }
 
+  /**
+   * 坑 66：解压期间持有 PARTIAL_WAKE_LOCK，防熄屏冻结导致解压中断循环。
+   * 20 分钟超时兜底（正常解压 2-4 分钟；释放失败由 finally 兜底，超时由系统兜底）。
+   * 权限缺失/PM 异常时返回 null（解压照常，仅退化为旧行为）。
+   */
+  private fun acquireRefreshWakeLock(): android.os.PowerManager.WakeLock? {
+    return try {
+      val pm = getSystemService(Context.POWER_SERVICE) as? PowerManager ?: return null
+      val wl = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "dsh:snapshot-refresh")
+      wl.setReferenceCounted(false)
+      wl.acquire(20 * 60 * 1000L)
+      wl
+    } catch (t: Throwable) {
+      Log.w("dsh-shell", "wake lock acquire failed (non-fatal)", t)
+      null
+    }
+  }
+
   private fun startEngineFlow() {
     // onCreate and the following onResume can both request startup. Acquire the
     // flow before mutating lifecycle state so a duplicate cannot invalidate the
@@ -1702,24 +1720,39 @@ class MainActivity : ComponentActivity() {
           progressText.visibility = View.VISIBLE
           progressText.text = "准备写入内嵌环境…"
         }
-        val ok = engineManager.refreshSnapshot { done, _ ->
-          runOnUiThread {
-            if (!isCurrentEngineFlow(generation)) return@runOnUiThread
-            // done 是解压后字节数，total 是压缩包字节数，口径不一致；只显示已解压量。
-            val mb = done / 1024 / 1024
-            progressText.visibility = View.VISIBLE
-            progressText.text = "已写入 " + mb + " MB"
-            if (lastGuidePhase != GuidePhase.Extracting) {
-              applyGuidePhase(GuidePhase.Extracting, "正在解压运行时")
+        // 坑 66：全量解压 2-4 分钟，熄屏后激进 ROM（vivo OriginOS 等）会冻结/截杀
+        // 前台 Activity 进程 → 解压半途而废、指纹不写 → 下次启动从头再解（观感即
+        // 「一直循环解压」）。解压全程持 PARTIAL_WAKE_LOCK（超时 20 分钟兜底）。
+        val wakeLock = acquireRefreshWakeLock()
+        val ok = try {
+          engineManager.refreshSnapshot { done, _ ->
+            runOnUiThread {
+              if (!isCurrentEngineFlow(generation)) return@runOnUiThread
+              // done 是解压后字节数，total 是压缩包字节数，口径不一致；只显示已解压量。
+              val mb = done / 1024 / 1024
+              progressText.visibility = View.VISIBLE
+              progressText.text = "已写入 " + mb + " MB"
+              if (lastGuidePhase != GuidePhase.Extracting) {
+                applyGuidePhase(GuidePhase.Extracting, "正在解压运行时")
+              }
             }
           }
+        } finally {
+          try { wakeLock?.release() } catch (_: Throwable) {}
         }
         if (!ok) {
           runOnUiThread {
             if (!isCurrentEngineFlow(generation)) return@runOnUiThread
             // 0.13.1 W3：解压失败此前零落盘（engine.log 尚不存在、仅 logcat），镜像现场到共享目录。
             engineManager.mirrorDiagnosticsToShared("snapshot-refresh-failed")
-            applyGuidePhase(GuidePhase.Error, "运行时更新失败（诊断包已存至 Documents/dshdata/diagnostics）")
+            // 坑 66：旧文案只报「更新失败」，用户无从区分空间不足/解压异常；
+            // 上屏 EngineManager 记录的真实失败原因（含具体数字）。
+            val reason = engineManager.lastRefreshError
+            applyGuidePhase(
+              GuidePhase.Error,
+              if (reason.isNullOrBlank()) "运行时更新失败（诊断包已存至 Documents/dshdata/diagnostics）"
+              else "运行时更新失败：" + reason + "（诊断包已存至 Documents/dshdata/diagnostics）"
+            )
             showGuide()
           }
           return@Thread

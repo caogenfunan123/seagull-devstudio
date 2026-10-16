@@ -41,6 +41,11 @@ class EngineManager(private val context: Context, private val pickToken: String?
   /** Consecutive healthy probe ticks since the last update swap (update-v2 confirmation state). */
   private var updateHealthTicks = 0
 
+  /** 上一次 refreshSnapshot 失败的人类可读原因（null = 未失败/未跑过）。MainActivity 上屏用。 */
+  @Volatile
+  var lastRefreshError: String? = null
+    private set
+
   val engineReady: Boolean get() = nodeBin.exists()
 
   /**
@@ -94,9 +99,13 @@ class EngineManager(private val context: Context, private val pickToken: String?
    * (retried on next start).
    */
   fun refreshSnapshot(onProgress: (Long, Long) -> Unit): Boolean {
+    lastRefreshError = null
     val backup = File(context.filesDir, ".dsh-backup")
     val dsh = File(homeDir, ".dsh")
     try {
+      // 坑 66：空间预检先行（在任何删除动作之前）——存储不足时旧实现在解压中途抛 ENOSPC，
+      // 指纹不写 → 每次启动重解压，屏幕只有笼统失败文案，用户侧表现即「一直循环解压」。
+      if (!ensureSpaceForRefresh(dsh, backup)) return false
       if (dsh.exists()) {
         backup.deleteRecursively()
         // Upgrade-residue tolerance (v0.12.4): profile node_modules may carry dangling symlinks
@@ -104,7 +113,16 @@ class EngineManager(private val context: Context, private val pickToken: String?
         // exists() check on a dangling link throws NoSuchFileException and fails the whole refresh.
         // Drop broken links before backing up (profiles follow the snapshot; the backup omits them).
         dsh.walkTopDown().forEach { if (java.nio.file.Files.isSymbolicLink(it.toPath()) && !it.exists()) it.delete() }
-        dsh.copyRecursively(backup)
+        // 坑 66：备份排除 ubuntu-rootfs（~300MB 工具资产，刷新后由 extractToolAssets 原地重建，
+        // 进备份纯属双倍 IO/空间，正是低存储设备被推进 ENOSPC 循环的推手）；
+        // copyRecursively 失败只返回 false 不抛异常——旧实现忽略返回值，备份残缺继续走，
+        // 数据静默丢失且现场不可见。现失败即中止并报因。
+        if (!copyDshBackup(dsh, backup)) {
+          lastRefreshError = "用户数据备份失败（存储空间不足或 IO 错误）"
+          restoreUserData(backup, dsh)
+          Log.e(TAG, "snapshot refresh: user data backup failed, kept old runtime")
+          return false
+        }
       }
       val ok = extractSnapshot(onProgress)
       if (!ok) {
@@ -119,10 +137,79 @@ class EngineManager(private val context: Context, private val pickToken: String?
       Log.i(TAG, "snapshot refreshed (fingerprint " + bundledFingerprint().take(12) + ")")
       return true
     } catch (t: Throwable) {
+      lastRefreshError = describeThrowable(t)
       restoreUserData(backup, dsh)
       Log.e(TAG, "snapshot refresh failed; kept old runtime", t)
       return false
     }
+  }
+
+  /** 失败原因提炼（ENOSPC 等文件系统异常的 message 本身已可读，截断防刷屏）。 */
+  private fun describeThrowable(t: Throwable): String {
+    val msg = t.message?.take(140)
+    return "解压失败：" + (if (msg.isNullOrBlank()) t.javaClass.simpleName else msg)
+  }
+
+  /**
+   * 刷新空间预检（坑 66）：需要 ≈ 备份量（.dsh 扣除 ubuntu-rootfs）+ 4×快照压缩包
+   * （实测 xz→tar 膨胀 ≈3.9 倍）+ 256MB 余量。旧 .dsh-backup 属于上一轮刷新的
+   * 可弃产物（restoreUserData 已还原过其中用户数据），空间不足时先删再测。
+   * 不足即快速失败并写入 lastRefreshError（含具体数字），绝不带着确定失败的空间预算开跑。
+   */
+  private fun ensureSpaceForRefresh(dsh: File, backup: File): Boolean {
+    try {
+      val snapshotBytes = context.assets.open("snapshot.tar.xz").use { it.available().toLong() }
+      val backupBytes = if (dsh.exists()) {
+        val rootfsPrefix = File(dsh, "ubuntu-rootfs").absolutePath + File.separator
+        var total = 0L
+        dsh.walkTopDown().forEach { f ->
+          if (f.absolutePath.startsWith(rootfsPrefix)) return@forEach
+          if (f.isFile) total += f.length()
+        }
+        total
+      } else 0L
+      val required = backupBytes + snapshotBytes * 4 + 256L * 1024 * 1024
+      var available = android.os.StatFs(context.filesDir.path).availableBytes
+      if (available < required && backup.exists()) {
+        backup.deleteRecursively()
+        available = android.os.StatFs(context.filesDir.path).availableBytes
+      }
+      if (available < required) {
+        lastRefreshError = "存储空间不足（需约 " + (required / 1073741824.0).toString() +
+          " GB，可用 " + (available / 1073741824.0).toString() + " GB），请清理后重试"
+        Log.e(TAG, "snapshot refresh aborted: " + lastRefreshError)
+        return false
+      }
+      return true
+    } catch (t: Throwable) {
+      // 预检自身失败（如 StatFs 不可用）不阻塞刷新——保持旧行为，解压路径仍会兜底报错。
+      Log.w(TAG, "space precheck failed (non-fatal)", t)
+      return true
+    }
+  }
+
+  /**
+   * .dsh 用户数据备份（坑 66）：语义等同 copyRecursively，但 ① 排除 ubuntu-rootfs
+   * （工具资产，刷新后由 extractToolAssets 原地重建，不属用户数据）；② 失败不再静默
+   * （copyRecursively 只返回 false 不抛异常，旧实现忽略返回值）——任一文件拷贝失败即
+   * 返回 false，由调用方中止刷新并上屏原因。
+   */
+  private fun copyDshBackup(src: File, dst: File): Boolean {
+    val rootfsDir = File(homeDir, ".dsh/ubuntu-rootfs")
+    if (src.absolutePath == rootfsDir.absolutePath) return true
+    if (!src.isDirectory) {
+      return try {
+        src.copyTo(dst, overwrite = true).exists()
+      } catch (t: Throwable) {
+        Log.w(TAG, "backup copy failed: " + src.absolutePath, t)
+        false
+      }
+    }
+    if (!dst.exists() && !dst.mkdirs() && !dst.isDirectory) return false
+    src.listFiles()?.forEach { child ->
+      if (!copyDshBackup(child, File(dst, child.name))) return false
+    }
+    return true
   }
 
   /** Restore the snapshot-stripped user data dirs/files (copied back from the backup into private .dsh).
@@ -166,6 +253,7 @@ class EngineManager(private val context: Context, private val pickToken: String?
       true
     } catch (t: Throwable) {
       Log.e(TAG, "snapshot extract failed", t)
+      lastRefreshError = describeThrowable(t)
       false
     }
   }
